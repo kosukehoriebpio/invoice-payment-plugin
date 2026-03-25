@@ -33,19 +33,39 @@ PLUGIN_ROOT = このSKILL.mdから3階層上のディレクトリ
               （skills/invoice-payment/SKILL.md → plugins/invoice-payment/）
               Glob で plugins/invoice-payment/.claude-plugin/plugin.json を探して確定する
 
-REF_FILE    = {PLUGIN_ROOT}/references/{client-slug}.md
+REF_DIR     = .invoice-payment-references/
+              （リファレンス専用リポのローカルクローン）
+REF_FILE    = {REF_DIR}/{client-slug}.md
 WORK_DIR    = .tmp-invoice-payment/{client-slug}/{YYYY-MM}/
               （YYYY-MMは現在の年月）
 SCRIPTS     = {PLUGIN_ROOT}/scripts/
 ```
 
-### 0-3. リファレンス読込
+### 0-3. リファレンスの同期（自動pull）
 
-1. `REF_FILE` を Read で読み込む
+リファレンスはプラグインとは別のリポ（`kosukehoriebpio/invoice-payment-references`）で管理されている。
+プラグイン起動時に最新版を自動取得する:
+
+```bash
+# 初回: クローン
+if [ ! -d ".invoice-payment-references" ]; then
+  git clone https://github.com/kosukehoriebpio/invoice-payment-references.git .invoice-payment-references
+fi
+
+# 2回目以降: pull（最新版を取得）
+cd .invoice-payment-references && git pull --ff-only && cd ..
+```
+
+この処理は毎回Step 0で実行する。社員は初回実行時に自動クローンされ、以降は自動pullで常に最新のリファレンスが使える。
+
+### 0-4. リファレンス読込
+
+1. `REF_FILE`（`.invoice-payment-references/{client-slug}.md`）を Read で読み込む
 2. 存在しない場合 → ユーザーに通知:
    ```
    「{client-slug} のリファレンスが見つかりません。
-    {PLUGIN_ROOT}/references/_template.md をもとに作成しますか？」
+    .invoice-payment-references/_template.md をもとに作成しますか？
+    作成後、リファレンスリポにコミット・プッシュすれば全社員に反映されます。」
    ```
 3. リファレンスの内容を把握し、以下を特定:
    - 会計ツール（tool / apiAvailable）
@@ -54,7 +74,7 @@ SCRIPTS     = {PLUGIN_ROOT}/scripts/
    - 振込元口座
    - 振込実行方法（method: manual/api）
 
-### 0-4. 作業ディレクトリ作成
+### 0-5. 作業ディレクトリ作成
 
 ```bash
 mkdir -p {WORK_DIR}/invoices

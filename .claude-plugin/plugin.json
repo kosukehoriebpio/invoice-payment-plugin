@@ -31,7 +31,8 @@
     ]
   },
   "configuration": {
-    "referencesDir": "references/",
+    "referencesRepo": "kosukehoriebpio/invoice-payment-references",
+    "referencesDir": ".invoice-payment-references/",
     "workDir": ".tmp-invoice-payment/"
   }
 }
