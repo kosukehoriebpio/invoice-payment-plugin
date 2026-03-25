@@ -215,10 +215,14 @@ npx tsx {SCRIPTS}/generate-fb.ts {WORK_DIR} {REF_FILE}
 
 ## Step 5: 振込実行（execute）
 
-リファレンスの「振込実行」セクションの `method` を読んで分岐する。
+**重要: 銀行のインターネットバンキング操作は、リファレンスの設定に関わらず、必ず人間が行う。**
+APIやPlaywright等による銀行IBの自動操作は禁止。
+このステップでClaudeが行うのは「操作手順の提示」と「完了報告の受付」のみ。
 
-### method: manual
-ユーザーに操作手順を表示:
+### 処理フロー
+
+リファレンスの「振込実行」セクションからIBの種類と操作手順を取得し、ユーザーに提示する:
+
 ```
 【振込実行手順】
 1. {bankingSystem} にログイン
@@ -230,12 +234,8 @@ npx tsx {SCRIPTS}/generate-fb.ts {WORK_DIR} {REF_FILE}
 ```
 → AskUserQuestion で完了報告を待つ
 
-### method: api
-リファレンスの `apiEndpoint` にFBファイルをアップロード:
-```bash
-curl -X POST -F "file=@{WORK_DIR}/_payment.fb.txt" {apiEndpoint}
-```
-結果を表示してユーザーに確認。
+**注**: リファレンスに `method: api` と記載されていても、銀行IB操作は手動で実行する。
+`method: api` はテスト環境（ダミー銀行モックAPI）でのみ使用可能。
 
 ---
 
@@ -289,6 +289,7 @@ Step 6 → 消込確認（スクリプト）
 
 ## 注意事項
 
+- **銀行IB操作は絶対に自動化しない** — Step 5の振込実行は常に人間が手動で行う。API/Playwright等による銀行操作は本番環境では禁止。テスト環境（ダミー銀行モックAPI）でのみ method: api を許可
 - **振込実行（Step 5）は必ずユーザー確認を経る** — 金額操作は自動で最終実行しない
 - リファレンスが不完全な場合は実行を中断し、不足項目を報告する
 - スクリプト（check.ts / generate-fb.ts / reconcile.ts）はクライアント固有ロジックを持たない。全てリファレンスから読み取る
