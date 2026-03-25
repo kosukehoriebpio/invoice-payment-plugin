@@ -84,28 +84,40 @@ mkdir -p {WORK_DIR}/invoices
 
 ## Step 1: 請求書収集（collect）
 
-リファレンスの「請求書収集」セクションの `method` を読んで分岐する。
+**スクリプトで実行する。**
 
-### method: auto
-リファレンスの `source` に従って自動収集:
-- **Gmail**: Gmail MCPツール（gmail_search_messages / gmail_read_message）で検索→添付PDF保存
-- **Google Drive**: Drive MCPツール（drive_files_list / drive_files_download）でフォルダ内ファイル取得
-- MCPツールが使えない場合は manual にフォールバック
+```bash
+npx tsx {SCRIPTS}/collect.ts {WORK_DIR} {REF_FILE}
+```
 
-### method: manual
-ユーザーに指示:
+スクリプトがリファレンスの `source` を読み、自動で適切な収集モードを選択する:
+- **Google Drive**（sourceにフォルダIDがある場合）: Drive APIで自動ダウンロード
+  - 年月サブフォルダがあればそこから取得
+- **ローカル**（sourceが空 or Drive ID不明の場合）: `{WORK_DIR}/invoices/` のファイルをスキャン
+
+### Drive収集を明示指定する場合
+
+```bash
+npx tsx {SCRIPTS}/collect.ts {WORK_DIR} {REF_FILE} --source drive:{folderId}
+```
+
+### 手動配置（manual）の場合
+
+スクリプト実行前にユーザーに指示:
 ```
 「{clientName}の今月分の請求書PDFを以下に配置してください:
  {WORK_DIR}/invoices/
  配置が完了したら教えてください。」
 ```
-→ AskUserQuestion で完了を待つ
+→ AskUserQuestion で完了を待ち、その後スクリプトを実行
 
-### method: hybrid
-auto を実行した後、「他に手動で追加する請求書はありますか？」と確認
+### hybrid モード
+
+Drive収集後に「他に手動で追加する請求書はありますか？」と確認。
+追加がある場合は `{WORK_DIR}/invoices/` に手動配置後、再度スクリプトを実行。
 
 ### 収集完了後
-`{WORK_DIR}/invoices/` 内のPDFファイル一覧を Glob で取得し、`_manifest.json` を生成:
+スクリプトが `_manifest.json` を `{WORK_DIR}/` に生成:
 
 ```json
 {
