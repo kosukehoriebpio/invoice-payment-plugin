@@ -1,0 +1,37 @@
+{
+  "name": "invoice-payment",
+  "version": "0.1.0",
+  "displayName": "請求書振込業務プラグイン",
+  "description": "経理BPOの請求書振込業務を標準化・自動化する。クライアント別リファレンスに基づき、収集→読取→チェック→振込データ作成→実行→消込の6ステップを実行。",
+  "author": "SevenRich BPO",
+  "license": "UNLICENSED",
+  "private": true,
+  "skills": [
+    "skills/invoice-payment/SKILL.md"
+  ],
+  "dependencies": {
+    "mcpServers": {
+      "gmail": {
+        "required": false,
+        "purpose": "Step 1: メール添付の請求書を自動収集（auto method 使用時）"
+      },
+      "gws": {
+        "required": false,
+        "purpose": "Step 1: Google Driveからの請求書取得、Step 4: 振込ファイルのDriveアップロード"
+      }
+    },
+    "tools": [
+      "Read",
+      "Write",
+      "Edit",
+      "Bash",
+      "Glob",
+      "Grep",
+      "AskUserQuestion"
+    ]
+  },
+  "configuration": {
+    "referencesDir": "references/",
+    "workDir": ".tmp-invoice-payment/"
+  }
+}

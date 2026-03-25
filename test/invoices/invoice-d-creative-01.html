@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>請求書 - 株式会社Dクリエイティブ</title>
+<style>
+  body { font-family: 'Yu Gothic', 'Hiragino Sans', sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; color: #333; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; }
+  .company-name { font-size: 20px; font-weight: bold; letter-spacing: 3px; }
+  .title { font-size: 20px; font-weight: 300; letter-spacing: 8px; text-align: center; margin: 40px 0; padding: 15px 0; border-top: 1px solid #333; border-bottom: 1px solid #333; }
+  .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin: 30px 0; }
+  .meta-left p, .meta-right p { margin: 5px 0; font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; margin: 25px 0; }
+  th { border-bottom: 2px solid #333; padding: 10px; font-size: 12px; text-align: left; font-weight: normal; color: #666; text-transform: uppercase; letter-spacing: 1px; }
+  td { border-bottom: 1px solid #eee; padding: 12px 10px; font-size: 13px; }
+  td.num { text-align: right; font-family: monospace; }
+  .summary { margin: 30px 0; }
+  .summary table { width: 350px; margin-left: auto; }
+  .summary td { border: none; padding: 6px 10px; }
+  .summary tr.total { border-top: 2px solid #333; }
+  .summary tr.total td { font-weight: bold; font-size: 16px; padding-top: 12px; }
+  .withholding { background: #fff3cd; padding: 15px; margin: 20px 0; border-left: 4px solid #ffc107; font-size: 13px; }
+  .bank { margin-top: 25px; padding: 15px; border: 1px solid #ddd; font-size: 13px; }
+</style>
+</head>
+<body>
+
+  <div class="header">
+    <div>
+      <div class="company-name">D CREATIVE</div>
+      <div style="font-size: 12px; color: #888; margin-top: 3px;">株式会社Dクリエイティブ</div>
+    </div>
+    <div style="text-align: right; font-size: 12px; color: #666;">
+      〒153-0042 東京都目黒区青葉台3-5-7<br>
+      TEL: 03-5555-1234<br>
+      info@d-creative.example.com<br>
+      登録番号: T5555555555555
+    </div>
+  </div>
+
+  <div class="title">INVOICE</div>
+
+  <div class="meta">
+    <div class="meta-left">
+      <p style="font-size: 16px; font-weight: bold; border-bottom: 1px solid #333; display: inline-block; padding-bottom: 3px;">株式会社テストフーズ 御中</p>
+      <p>〒150-0021 東京都渋谷区恵比寿西1-1-1</p>
+    </div>
+    <div class="meta-right" style="text-align: right;">
+      <p>請求書番号: DC-2026-0087</p>
+      <p>発行日: 2026年3月20日</p>
+      <p>お支払期限: 2026年4月30日</p>
+    </div>
+  </div>
+
+  <table>
+    <tr>
+      <th>内容</th><th>数量</th><th style="text-align: right;">単価</th><th style="text-align: right;">金額</th>
+    </tr>
+    <tr>
+      <td>春季キャンペーン メニューデザイン制作<br><span style="font-size: 11px; color: #888;">A3メニュー表 / テイクアウトメニュー / POP 3種</span></td>
+      <td>1式</td>
+      <td class="num">¥350,000</td>
+      <td class="num">¥350,000</td>
+    </tr>
+    <tr>
+      <td>撮影ディレクション・フードフォト撮影<br><span style="font-size: 11px; color: #888;">新メニュー12品 / スタジオ1日</span></td>
+      <td>1式</td>
+      <td class="num">¥150,000</td>
+      <td class="num">¥150,000</td>
+    </tr>
+  </table>
+
+  <div class="summary">
+    <table>
+      <tr><td>小計（税抜）</td><td class="num">¥500,000</td></tr>
+      <tr><td>消費税（10%）</td><td class="num">¥50,000</td></tr>
+      <tr><td>源泉徴収税額</td><td class="num">-¥51,050</td></tr>
+      <tr class="total"><td>ご請求金額</td><td class="num">¥498,950</td></tr>
+    </table>
+  </div>
+
+  <div class="withholding">
+    <strong>源泉徴収について</strong><br>
+    本請求はデザイン業務に係る報酬であり、所得税法第204条に基づく源泉徴収の対象となります。<br>
+    源泉徴収税額: ¥500,000 × 10.21% = ¥51,050
+  </div>
+
+  <div class="bank">
+    <strong>お振込先</strong><br>
+    三菱UFJ銀行 中目黒支店 普通 3333333<br>
+    口座名義: カ）ディークリエイティブ<br>
+    <br>
+    <span style="font-size: 12px; color: #666;">※恐れ入りますが、振込手数料はお客様にてご負担をお願いいたします。</span>
+  </div>
+
+</body>
+</html>
