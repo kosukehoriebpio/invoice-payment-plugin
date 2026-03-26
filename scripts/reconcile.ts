@@ -77,7 +77,12 @@ async function main() {
     });
     if (match) {
       matched.add(match.id);
-      results.push({ invoiceId: inv.invoiceId, vendorName: inv.vendorName, invoiceAmount: inv.totalAmount, transferId: match.id, transferAmount: match.amount, transferStatus: match.status, reconcileStatus: match.status === 'completed' ? 'OK' : 'WARN', message: match.status === 'completed' ? '消込OK' : `振込${match.status}` });
+      // Warn if matched by amount only (no name verification)
+      const nameVerified = !!(match.recipientName && invName);
+      const statusLabel = match.status === 'completed' ? 'OK' : 'WARN';
+      const msg = match.status === 'completed' ? '消込OK' : `振込${match.status}`;
+      const finalMsg = nameVerified ? msg : `${msg}（取引先名未検証 — 金額のみで照合）`;
+      results.push({ invoiceId: inv.invoiceId, vendorName: inv.vendorName, invoiceAmount: inv.totalAmount, transferId: match.id, transferAmount: match.amount, transferStatus: match.status, reconcileStatus: !nameVerified ? 'WARN' : statusLabel, message: finalMsg });
     } else {
       results.push({ invoiceId: inv.invoiceId, vendorName: inv.vendorName, invoiceAmount: inv.totalAmount, transferId: null, transferAmount: null, transferStatus: null, reconcileStatus: 'UNMATCHED', message: '対応振込なし' });
     }

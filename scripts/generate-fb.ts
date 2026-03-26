@@ -8,6 +8,11 @@
 import iconv from 'iconv-lite';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
+
+// ESM/CJS compatible __dirname
+const __filename_compat = typeof __filename !== 'undefined' ? __filename : fileURLToPath(import.meta.url);
+const __dirname_compat = path.dirname(__filename_compat);
 
 const workDir = process.argv[2];
 const refFile = process.argv[3];
@@ -28,7 +33,7 @@ const checkResult = JSON.parse(fs.readFileSync(path.join(workDir, '_check-result
 const extracted = JSON.parse(fs.readFileSync(path.join(workDir, '_extracted.json'), 'utf-8'));
 
 // 銀行コードマスタ（プラグイン同梱）— parseSenderFromRefより先に定義
-const pluginRoot = path.resolve(__dirname, '..');
+const pluginRoot = path.resolve(__dirname_compat, '..');
 const bankCodesPath = path.join(pluginRoot, 'data', 'bank-codes.json');
 const bankMaster: Record<string, { code: string; kana: string }> = fs.existsSync(bankCodesPath)
   ? JSON.parse(fs.readFileSync(bankCodesPath, 'utf-8')).banks
@@ -255,7 +260,10 @@ const lines: string[] = [];
 // Header
 let h = '1' + '21' + padLeft(sender.code, 10) + padRight(sender.name, 40) + sender.paymentDate + padLeft(sender.bankCode, 4) + padRight(sender.bankKana, 15) + padLeft(sender.branchCode, 3) + padRight(sender.branchKana, 15) + sender.accountType + padLeft(sender.accountNumber, 7);
 const hB = iconv.encode(h, 'Shift_JIS');
-lines.push(iconv.decode(Buffer.concat([hB, Buffer.alloc(Math.max(0, 120 - hB.length), 0x20)]), 'Shift_JIS'));
+if (hB.length > 120) {
+  console.warn(`[WARN] ヘッダーレコードが${hB.length}バイト（120バイト超）。切り詰めます。`);
+}
+lines.push(iconv.decode(Buffer.concat([hB.subarray(0, 120), Buffer.alloc(Math.max(0, 120 - hB.length), 0x20)]).subarray(0, 120), 'Shift_JIS'));
 
 for (const r of validRecords) {
   // 新規コード: '0'=その他, '1'=第1回, '2'=変更(既存先)
@@ -266,9 +274,11 @@ for (const r of validRecords) {
   // 区分(1) + 銀行コード(4) + 銀行名(15) + 支店コード(3) + 支店名(15) +
   // 手形交換所番号(4, スペース) + 預金種目(1) + 口座番号(7) + 受取人名(30) +
   // 振込金額(10) + 新規コード(1) + EDI情報(20) + 振込区分(1) + 予備(6) = 118 → パディングで120
-  let d = '2' + padLeft(r.bankCode, 4) + padRight(r.bankName, 15) + padLeft(r.branchCode, 3) + padRight(r.branchName, 15) + '    ' + r.accountType + padLeft(r.accountNumber, 7) + padRight(r.recipientName, 30) + padLeft(String(r.amount), 10) + newCode + ' '.repeat(20) + ' ' + ' '.repeat(6);
+  // 振込区分: '7'=テレ振込（電信）が一般的。銀行によっては ' ' も可。
+  const transferType = '7';
+  let d = '2' + padLeft(r.bankCode, 4) + padRight(r.bankName, 15) + padLeft(r.branchCode, 3) + padRight(r.branchName, 15) + '    ' + r.accountType + padLeft(r.accountNumber, 7) + padRight(r.recipientName, 30) + padLeft(String(r.amount), 10) + newCode + ' '.repeat(20) + transferType + ' '.repeat(6);
   const dB = iconv.encode(d, 'Shift_JIS');
-  lines.push(iconv.decode(Buffer.concat([dB, Buffer.alloc(Math.max(0, 120 - dB.length), 0x20)]), 'Shift_JIS'));
+  lines.push(iconv.decode(Buffer.concat([dB.subarray(0, 120), Buffer.alloc(Math.max(0, 120 - dB.length), 0x20)]).subarray(0, 120), 'Shift_JIS'));
 }
 
 let t = '8' + padLeft(String(validRecords.length), 6) + padLeft(String(totalAmount), 12);

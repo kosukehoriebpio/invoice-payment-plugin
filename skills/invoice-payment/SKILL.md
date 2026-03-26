@@ -313,6 +313,7 @@ generate-fb.ts が自動判定した `primaryTool` に基づいて分岐:
 | `unknown` | 未特定 | — | 3段フォールバック |
 
 #### バクラク（apiAvailable: true の場合）
+**注: この処理はスクリプトではなく、Claudeが直接API呼び出しを実行する。**
 ベースURL: `https://api.bakuraku.layerx.jp/rest/v1`（BAKURAKU_TOKEN env var 必須）
 1. 各請求書PDFを `POST /workflow/user_upload_files` でアップロード
 2. `POST /workflow/requests` で支払申請を作成（status: IN_PROGRESS）

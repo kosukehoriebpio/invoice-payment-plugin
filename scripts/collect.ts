@@ -534,11 +534,16 @@ async function main() {
   // === Drive Collection ===
   if (sourceMode === 'drive' && driveFolderId) {
     console.error('[Auto] Collecting from Google Drive...');
-    const periodFolder = await findPeriodSubfolder(driveFolderId, args.period);
-    const targetFolder = periodFolder || driveFolderId;
-    const driveEntries = await collectFromDrive(targetFolder, invoicesDir, args.period);
-    entries.push(...driveEntries);
-    autoCollected = true;
+    try {
+      const periodFolder = await findPeriodSubfolder(driveFolderId, args.period);
+      const targetFolder = periodFolder || driveFolderId;
+      const driveEntries = await collectFromDrive(targetFolder, invoicesDir, args.period);
+      entries.push(...driveEntries);
+      autoCollected = true;
+    } catch (err: any) {
+      console.error(`  Drive collection failed: ${err.message}`);
+      console.error('  Falling back to local scan.');
+    }
   }
 
   // === Gmail Collection ===

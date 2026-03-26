@@ -131,7 +131,11 @@ if (!fs.existsSync(extractedPath)) {
 
 const { regularVendors, withholdingVendors, highAmountThreshold, autoAdditions } = parseReference(refFile);
 const extracted = JSON.parse(fs.readFileSync(extractedPath, 'utf-8'));
-const invoices: any[] = extracted.invoices;
+const invoices: any[] = Array.isArray(extracted.invoices) ? extracted.invoices : [];
+if (invoices.length === 0) {
+  console.error('_extracted.json に請求書データがありません');
+  process.exit(1);
+}
 
 interface Check { checkType: string; status: 'OK' | 'WARN' | 'NG' | 'INFO'; message: string; }
 interface Result { invoiceId: string; vendorName: string; totalAmount: number; overallStatus: 'OK' | 'WARN' | 'NG'; checks: Check[]; }
