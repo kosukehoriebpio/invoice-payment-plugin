@@ -69,7 +69,8 @@ def parse_date(text: str) -> str | None:
         if not m:
             continue
         if fmt == "reiwa":
-            year = 2018 + int(m.group(1))
+            era_year = 1 if m.group(1) == "元" else int(m.group(1))
+            year = 2018 + era_year
             return f"{year}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
         return fmt.format(int(m.group(1)), int(m.group(2)), int(m.group(3)))
     return None

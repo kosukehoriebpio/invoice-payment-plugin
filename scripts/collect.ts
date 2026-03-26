@@ -437,12 +437,23 @@ async function collectFromBakuraku(token: string, invoicesDir: string, period: s
         if (!fileRes.ok) continue;
 
         const buffer = Buffer.from(await fileRes.arrayBuffer());
+
+        // Skip oversized files (20MB limit, consistent with Gmail)
+        if (buffer.length > 20 * 1024 * 1024) {
+          console.error(`  ✗ ${fileName}: skipped (${(buffer.length / 1024 / 1024).toFixed(1)}MB exceeds 20MB limit)`);
+          continue;
+        }
+
         const safeName = fileName.replace(/[<>:"/\\|?*]/g, '_');
-        const destPath = path.join(invoicesDir, safeName);
+        // Avoid overwrite if same filename already exists
+        const destName = fs.existsSync(path.join(invoicesDir, safeName))
+          ? `${(req.id || 'bk').slice(0, 8)}_${safeName}`
+          : safeName;
+        const destPath = path.join(invoicesDir, destName);
         fs.writeFileSync(destPath, buffer);
 
         entries.push({
-          file: `invoices/${safeName}`,
+          file: `invoices/${destName}`,
           originalName: fileName,
           source: 'bakuraku',
           downloadedAt: new Date().toISOString(),

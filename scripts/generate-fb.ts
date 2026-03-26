@@ -109,7 +109,12 @@ if (refFile && fs.existsSync(refFile)) {
   const apiMatch = refContent.match(/- apiAvailable:\s*(true|false)/);
   if (apiMatch) toolApiAvailable = apiMatch[1] === 'true';
   const instrMatch = refContent.match(/- manualInstructions:\s*\|\n([\s\S]*?)(?=\n---|\n##)/);
-  if (instrMatch) toolManualInstructions = instrMatch[1].replace(/^    /gm, '').trim();
+  if (instrMatch) {
+    const raw = instrMatch[1];
+    const indentMatch = raw.match(/^(\s+)/);
+    const indent = indentMatch ? indentMatch[1] : '    ';
+    toolManualInstructions = raw.replace(new RegExp(`^${indent}`, 'gm'), '').trim();
+  }
 
   // Parse regular vendors for new code determination
   const vendorSection = refContent.match(/### 定期取引先[\s\S]*?(?=\n##|\n---|$)/m);
@@ -127,12 +132,12 @@ function resolveToolKey(tool: string): string {
   if (/bakuraku|バクラク/i.test(tool)) return 'bakuraku';
   if (/mf.*債務|mf.*shiharai|moneyforward.*債務/i.test(tool)) return 'mf-shiharai';
   if (/freee/i.test(tool)) return 'freee';
-  if (/mf|moneyforward|マネーフォワード/i.test(tool)) return 'mf-kaikei';
+  if (/\bmf\b|moneyforward|マネーフォワード/i.test(tool)) return 'mf-kaikei';
   if (/弥生|yayoi/i.test(tool)) return 'yayoi';
   if (/奉行|bugyo/i.test(tool)) return 'bugyo';
-  if (/ics/i.test(tool)) return 'ics';
-  if (/tkc/i.test(tool)) return 'tkc';
-  if (/pca/i.test(tool)) return 'pca';
+  if (/\bics\b/i.test(tool)) return 'ics';
+  if (/\btkc\b/i.test(tool)) return 'tkc';
+  if (/\bpca\b/i.test(tool)) return 'pca';
   return 'unknown';
 }
 
@@ -257,7 +262,11 @@ for (const r of validRecords) {
   // 初回振込か既存かの判定はリファレンスの定期取引先リストと突合して決定
   const isKnownVendor = Object.keys(regularVendors || {}).includes(r.vendorName);
   const newCode = isKnownVendor ? '2' : '0';
-  let d = '2' + padLeft(r.bankCode, 4) + padRight(r.bankName, 15) + padLeft(r.branchCode, 3) + padRight(r.branchName, 15) + '    ' + r.accountType + padLeft(r.accountNumber, 7) + padRight(r.recipientName, 30) + padLeft(String(r.amount), 10) + newCode + ' '.repeat(40);
+  // 全銀協フォーマット データレコード (120バイト):
+  // 区分(1) + 銀行コード(4) + 銀行名(15) + 支店コード(3) + 支店名(15) +
+  // 手形交換所番号(4, スペース) + 預金種目(1) + 口座番号(7) + 受取人名(30) +
+  // 振込金額(10) + 新規コード(1) + EDI情報(20) + 振込区分(1) + 予備(6) = 118 → パディングで120
+  let d = '2' + padLeft(r.bankCode, 4) + padRight(r.bankName, 15) + padLeft(r.branchCode, 3) + padRight(r.branchName, 15) + '    ' + r.accountType + padLeft(r.accountNumber, 7) + padRight(r.recipientName, 30) + padLeft(String(r.amount), 10) + newCode + ' '.repeat(20) + ' ' + ' '.repeat(6);
   const dB = iconv.encode(d, 'Shift_JIS');
   lines.push(iconv.decode(Buffer.concat([dB, Buffer.alloc(Math.max(0, 120 - dB.length), 0x20)]), 'Shift_JIS'));
 }
@@ -277,9 +286,10 @@ console.log(`\nFB: ${fbPath}`);
 const excluded = checkResult.results.filter((r: any) => r.overallStatus === 'NG');
 
 // Tool-specific instructions for accounting system integration
-const TOOL_INSTRUCTIONS: Record<string, { name: string; apiStatus: string; manualSteps: string }> = {
+const TOOL_INSTRUCTIONS: Record<string, { name: string; apiReady: boolean; apiStatus: string; manualSteps: string }> = {
   'bakuraku': {
     name: 'バクラク債権・債務管理',
+    apiReady: true,
     apiStatus: 'API連携可能（支払申請作成）',
     manualSteps: [
       '1. バクラク (https://invoice.layerx.jp) にログイン',
@@ -292,6 +302,7 @@ const TOOL_INSTRUCTIONS: Record<string, { name: string; apiStatus: string; manua
   },
   'mf-shiharai': {
     name: 'マネーフォワード債務支払',
+    apiReady: false,
     apiStatus: 'API未成熟（手動操作）',
     manualSteps: [
       '1. MF債務支払 にログイン',
@@ -305,6 +316,7 @@ const TOOL_INSTRUCTIONS: Record<string, { name: string; apiStatus: string; manua
   },
   'freee': {
     name: 'freee会計',
+    apiReady: false, // API連携可能だが未実装
     apiStatus: 'API連携可能（取引登録・振込データ）※未実装',
     manualSteps: [
       '1. freee会計にログイン',
@@ -316,6 +328,7 @@ const TOOL_INSTRUCTIONS: Record<string, { name: string; apiStatus: string; manua
     ].join('\n'),
   },
   'mf-kaikei': {
+    apiReady: false,
     name: 'マネーフォワード会計',
     apiStatus: 'API未成熟（CSVインポート）',
     manualSteps: [
@@ -326,6 +339,7 @@ const TOOL_INSTRUCTIONS: Record<string, { name: string; apiStatus: string; manua
     ].join('\n'),
   },
   'yayoi': {
+    apiReady: false,
     name: '弥生会計',
     apiStatus: '手動操作のみ',
     manualSteps: [
@@ -335,6 +349,7 @@ const TOOL_INSTRUCTIONS: Record<string, { name: string; apiStatus: string; manua
     ].join('\n'),
   },
   'bugyo': {
+    apiReady: false,
     name: '勘定奉行 / 商蔵奉行',
     apiStatus: '手動操作のみ',
     manualSteps: [
@@ -344,6 +359,7 @@ const TOOL_INSTRUCTIONS: Record<string, { name: string; apiStatus: string; manua
     ].join('\n'),
   },
   'ics': {
+    apiReady: false,
     name: 'ICS会計',
     apiStatus: '手動操作のみ',
     manualSteps: [
@@ -353,6 +369,7 @@ const TOOL_INSTRUCTIONS: Record<string, { name: string; apiStatus: string; manua
     ].join('\n'),
   },
   'tkc': {
+    apiReady: false,
     name: 'TKC会計',
     apiStatus: '手動操作のみ',
     manualSteps: [
@@ -362,6 +379,7 @@ const TOOL_INSTRUCTIONS: Record<string, { name: string; apiStatus: string; manua
     ].join('\n'),
   },
   'pca': {
+    apiReady: false,
     name: 'PCA会計',
     apiStatus: '手動操作のみ',
     manualSteps: [
@@ -371,6 +389,7 @@ const TOOL_INSTRUCTIONS: Record<string, { name: string; apiStatus: string; manua
     ].join('\n'),
   },
   'unknown': {
+    apiReady: false,
     name: '会計ツール未特定',
     apiStatus: '手動操作',
     manualSteps: [
@@ -410,10 +429,11 @@ const summary = [
 fs.writeFileSync(path.join(workDir, '_payment-summary.md'), summary);
 
 // Output tool integration info as JSON for SKILL.md to use
+// apiAvailable = reference says true AND this tool's implementation is ready
 const integrationInfo = {
   primaryTool,
   toolName: toolInfo.name,
-  apiAvailable: toolApiAvailable,
+  apiAvailable: toolInfo.apiReady && toolApiAvailable,
   apiStatus: toolInfo.apiStatus,
 };
 fs.writeFileSync(path.join(workDir, '_tool-integration.json'), JSON.stringify(integrationInfo, null, 2));
