@@ -73,6 +73,10 @@ cd .invoice-payment-references && git pull --ff-only && cd ..
    - 定期取引先一覧
    - 振込元口座
    - 振込実行方法（method: manual/api）
+4. **不足フィールドを記録**する。各Stepで必要になった時点で以下の3段フォールバックを適用:
+   - **第1段**: リファレンスに記載あり → そのまま使用
+   - **第2段**: リファレンスに記載なし → AskUserQuestion でユーザーに質問。回答があればリファレンスへの反映も提案
+   - **第3段**: ユーザーも不明 → 該当処理をスキップし、手動操作の手順を案内。後続Stepは続行可能
 
 ### 0-5. 作業ディレクトリ作成
 
@@ -91,14 +95,24 @@ npx tsx {SCRIPTS}/collect.ts {WORK_DIR} {REF_FILE}
 ```
 
 スクリプトがリファレンスの `source` を読み、自動で適切な収集モードを選択する:
-- **Google Drive**（sourceにフォルダIDがある場合）: Drive APIで自動ダウンロード
-  - 年月サブフォルダがあればそこから取得
-- **ローカル**（sourceが空 or Drive ID不明の場合）: `{WORK_DIR}/invoices/` のファイルをスキャン
+- **Google Drive**（sourceにフォルダIDがある場合）: Drive APIで自動ダウンロード、年月サブフォルダ自動検出
+- **Gmail**（sourceにメールアドレスや「Gmail」記載がある場合）: 対象期間の添付PDF付きメールを検索・ダウンロード
+- **バクラク**（sourceにバクラクURL記載がある場合）: バクラクAPIで「処理中」の請求書を取得
+- **ローカル**（sourceが空 or 自動検出不可の場合）: `{WORK_DIR}/invoices/` のファイルをスキャン
 
-### Drive収集を明示指定する場合
+全モードで最後にローカルスキャンも実行し、手動追加されたファイルも拾う。
+
+### 収集ソースを明示指定する場合
 
 ```bash
+# Drive
 npx tsx {SCRIPTS}/collect.ts {WORK_DIR} {REF_FILE} --source drive:{folderId}
+
+# Gmail
+npx tsx {SCRIPTS}/collect.ts {WORK_DIR} {REF_FILE} --source gmail:"subject:請求書 from:vendor@example.com"
+
+# バクラク（BAKURAKU_TOKEN env必須）
+npx tsx {SCRIPTS}/collect.ts {WORK_DIR} {REF_FILE} --source bakuraku
 ```
 
 ### 手動配置（manual）の場合

@@ -7,12 +7,16 @@
  *
  * Options:
  *   --source drive:<folderId>   Google Drive フォルダから取得
+ *   --source gmail:<query>      Gmail 添付PDF検索（例: gmail:"請求書 from:vendor@example.com"）
+ *   --source bakuraku           バクラクAPIから処理中の請求書を取得
  *   --source local              WORK_DIR/invoices/ を手動配置前提でスキャン
  *   --source auto               リファレンスの設定から自動判定（デフォルト）
  *   --period <YYYY-MM>          対象年月（デフォルト: 当月）
+ *   --bakuraku-token <token>    バクラクAPIトークン（default: BAKURAKU_TOKEN env）
  *
  * リファレンスの source フォーマット例:
  *   "Google Drive フォルダID: 15PaMhjpiPdFVqTRaEJD5mHKpibDL4nRQ"
+ *   "Gmail keiri@example.com 件名に「請求書」を含むメール"
  *   "バクラク債権・債務管理（https://invoice.layerx.jp/invoices）"
  *   ""（空 = manual）
  */
@@ -27,7 +31,7 @@ import path from 'path';
 interface ManifestEntry {
   file: string;
   originalName: string;
-  source: 'drive' | 'local' | 'bakuraku';
+  source: 'drive' | 'gmail' | 'bakuraku' | 'local';
   downloadedAt: string;
   status: 'pending';
 }
@@ -44,8 +48,9 @@ interface Manifest {
 interface CollectArgs {
   workDir: string;
   refFile: string;
-  sourceOverride: string | null; // "drive:<id>", "local", "auto"
+  sourceOverride: string | null; // "drive:<id>", "gmail:<query>", "bakuraku", "local", "auto"
   period: string;                // YYYY-MM
+  bakurakuToken: string;
 }
 
 // ============================================================
@@ -64,11 +69,13 @@ function parseArgs(): CollectArgs {
     refFile: args[1],
     sourceOverride: null,
     period: `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`,
+    bakurakuToken: process.env.BAKURAKU_TOKEN || '',
   };
 
   for (let i = 2; i < args.length; i++) {
     if (args[i] === '--source') result.sourceOverride = args[++i];
     if (args[i] === '--period') result.period = args[++i];
+    if (args[i] === '--bakuraku-token') result.bakurakuToken = args[++i];
   }
 
   return result;
@@ -82,6 +89,7 @@ interface CollectionConfig {
   method: 'auto' | 'manual' | 'hybrid';
   source: string;
   driveFolderId: string | null;
+  gmailQuery: string | null;
   bakurakuUrl: string | null;
 }
 
@@ -90,6 +98,7 @@ function parseReference(refPath: string): CollectionConfig {
     method: 'manual',
     source: '',
     driveFolderId: null,
+    gmailQuery: null,
     bakurakuUrl: null,
   };
 
@@ -108,9 +117,18 @@ function parseReference(refPath: string): CollectionConfig {
   const driveIdMatch = config.source.match(/(?:folders\/|フォルダID:\s*)([a-zA-Z0-9_-]{20,})/);
   if (driveIdMatch) config.driveFolderId = driveIdMatch[1];
 
+  // Detect Gmail source
+  if (/Gmail|gmail|メール/i.test(config.source)) {
+    // Extract email or build a default query
+    const emailMatch = config.source.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+)/);
+    config.gmailQuery = emailMatch
+      ? `from:${emailMatch[1]} has:attachment filename:pdf`
+      : 'subject:請求書 has:attachment filename:pdf';
+  }
+
   // Detect Bakuraku
   if (/バクラク|bakuraku|layerx/i.test(config.source)) {
-    config.bakurakuUrl = 'https://invoice.layerx.jp/invoices';
+    config.bakurakuUrl = 'https://api.bakuraku.layerx.jp/rest/v1';
   }
 
   return config;
@@ -258,6 +276,163 @@ async function findPeriodSubfolder(folderId: string, period: string): Promise<st
 }
 
 // ============================================================
+// Gmail Collection
+// ============================================================
+
+async function loadGmailClient() {
+  const { google } = await import('googleapis');
+  const authModule = await import('../../integrations/lib/auth');
+  const auth = await authModule.getAuthClient();
+  return google.gmail({ version: 'v1', auth });
+}
+
+async function collectFromGmail(query: string, invoicesDir: string, period: string): Promise<ManifestEntry[]> {
+  console.error(`  Gmail query: ${query}`);
+
+  const gmail = await loadGmailClient();
+  const entries: ManifestEntry[] = [];
+
+  // Add date filter for the period
+  const [year, month] = period.split('-');
+  const afterDate = `${year}/${month}/01`;
+  const nextMonth = parseInt(month) === 12 ? `${parseInt(year) + 1}/01/01` : `${year}/${String(parseInt(month) + 1).padStart(2, '0')}/01`;
+  const fullQuery = `${query} after:${afterDate} before:${nextMonth}`;
+
+  console.error(`  Full query: ${fullQuery}`);
+
+  // Search messages
+  const listRes = await gmail.users.messages.list({
+    userId: 'me',
+    q: fullQuery,
+    maxResults: 50,
+  });
+
+  const messages = listRes.data.messages || [];
+  console.error(`  Found ${messages.length} messages`);
+
+  for (const msg of messages) {
+    if (!msg.id) continue;
+
+    // Get message with attachments
+    const msgRes = await gmail.users.messages.get({
+      userId: 'me',
+      id: msg.id,
+    });
+
+    const parts = msgRes.data.payload?.parts || [];
+    for (const part of parts) {
+      if (!part.filename || !part.body?.attachmentId) continue;
+
+      // Only download PDFs and images
+      const ext = path.extname(part.filename).toLowerCase();
+      if (!['.pdf', '.png', '.jpg', '.jpeg'].includes(ext)) continue;
+
+      try {
+        const attRes = await gmail.users.messages.attachments.get({
+          userId: 'me',
+          messageId: msg.id,
+          id: part.body.attachmentId,
+        });
+
+        const data = attRes.data.data;
+        if (!data) continue;
+
+        // Decode base64url
+        const buffer = Buffer.from(data, 'base64url');
+        const safeName = part.filename.replace(/[<>:"/\\|?*]/g, '_');
+
+        // Avoid duplicates by adding message ID prefix if needed
+        const destName = fs.existsSync(path.join(invoicesDir, safeName))
+          ? `${msg.id.slice(0, 8)}_${safeName}`
+          : safeName;
+        const destPath = path.join(invoicesDir, destName);
+
+        fs.writeFileSync(destPath, buffer);
+
+        entries.push({
+          file: `invoices/${destName}`,
+          originalName: part.filename,
+          source: 'gmail',
+          downloadedAt: new Date().toISOString(),
+          status: 'pending',
+        });
+        console.error(`  ✓ ${destName} (${(buffer.length / 1024).toFixed(0)}KB)`);
+      } catch (err: any) {
+        console.error(`  ✗ ${part.filename}: ${err.message}`);
+      }
+    }
+  }
+
+  return entries;
+}
+
+// ============================================================
+// Bakuraku Collection
+// ============================================================
+
+const BAKURAKU_API_BASE = 'https://api.bakuraku.layerx.jp/rest/v1';
+
+async function collectFromBakuraku(token: string, invoicesDir: string, period: string): Promise<ManifestEntry[]> {
+  console.error(`  Bakuraku API: fetching pending invoices`);
+
+  const entries: ManifestEntry[] = [];
+
+  // List workflow requests (pending/in-progress invoices)
+  const listRes = await fetch(`${BAKURAKU_API_BASE}/workflow/requests?status=IN_PROGRESS&per_page=100`, {
+    headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' },
+  });
+
+  if (!listRes.ok) {
+    const errText = await listRes.text();
+    console.error(`  Bakuraku API error: ${listRes.status} ${errText}`);
+    return entries;
+  }
+
+  const data = await listRes.json();
+  const requests = data.requests || data.data || [];
+  console.error(`  Found ${requests.length} pending requests`);
+
+  for (const req of requests) {
+    // Filter by period if possible (check date fields)
+    const reqDate = req.due_date || req.created_at || '';
+    if (period && reqDate && !reqDate.startsWith(period)) continue;
+
+    // Download attached files
+    const files = req.files || req.uploaded_files || [];
+    for (const file of files) {
+      const fileUrl = file.url || file.download_url;
+      const fileName = file.name || file.filename || `bakuraku_${req.id}.pdf`;
+      if (!fileUrl) continue;
+
+      try {
+        const fileRes = await fetch(fileUrl, {
+          headers: { 'Authorization': `Bearer ${token}` },
+        });
+        if (!fileRes.ok) continue;
+
+        const buffer = Buffer.from(await fileRes.arrayBuffer());
+        const safeName = fileName.replace(/[<>:"/\\|?*]/g, '_');
+        const destPath = path.join(invoicesDir, safeName);
+        fs.writeFileSync(destPath, buffer);
+
+        entries.push({
+          file: `invoices/${safeName}`,
+          originalName: fileName,
+          source: 'bakuraku',
+          downloadedAt: new Date().toISOString(),
+          status: 'pending',
+        });
+        console.error(`  ✓ ${safeName} (${(buffer.length / 1024).toFixed(0)}KB)`);
+      } catch (err: any) {
+        console.error(`  ✗ ${fileName}: ${err.message}`);
+      }
+    }
+  }
+
+  return entries;
+}
+
+// ============================================================
 // Main
 // ============================================================
 
@@ -265,26 +440,43 @@ async function main() {
   const args = parseArgs();
   const config = parseReference(args.refFile);
 
-  // Determine source
-  let sourceMode: 'drive' | 'local' = 'local';
+  // Determine source mode
+  type SourceMode = 'drive' | 'gmail' | 'bakuraku' | 'local';
+  let sourceMode: SourceMode = 'local';
   let driveFolderId: string | null = null;
+  let gmailQuery: string | null = null;
 
   if (args.sourceOverride) {
     if (args.sourceOverride.startsWith('drive:')) {
       sourceMode = 'drive';
       driveFolderId = args.sourceOverride.slice(6);
+    } else if (args.sourceOverride.startsWith('gmail:')) {
+      sourceMode = 'gmail';
+      gmailQuery = args.sourceOverride.slice(6);
+    } else if (args.sourceOverride === 'bakuraku') {
+      sourceMode = 'bakuraku';
     } else if (args.sourceOverride === 'auto') {
+      // Priority: Drive > Bakuraku > Gmail > local
       if (config.driveFolderId) {
         sourceMode = 'drive';
         driveFolderId = config.driveFolderId;
+      } else if (config.bakurakuUrl) {
+        sourceMode = 'bakuraku';
+      } else if (config.gmailQuery) {
+        sourceMode = 'gmail';
+        gmailQuery = config.gmailQuery;
       }
     }
-    // "local" → stay as local
   } else {
     // Auto-detect from reference
     if (config.driveFolderId) {
       sourceMode = 'drive';
       driveFolderId = config.driveFolderId;
+    } else if (config.bakurakuUrl) {
+      sourceMode = 'bakuraku';
+    } else if (config.gmailQuery) {
+      sourceMode = 'gmail';
+      gmailQuery = config.gmailQuery;
     }
   }
 
@@ -292,7 +484,7 @@ async function main() {
   console.error(`Work dir: ${args.workDir}`);
   console.error(`Reference: ${args.refFile}`);
   console.error(`Period: ${args.period}`);
-  console.error(`Source: ${sourceMode}${driveFolderId ? ` (folder: ${driveFolderId})` : ''}`);
+  console.error(`Source: ${sourceMode}${driveFolderId ? ` (folder: ${driveFolderId})` : ''}${gmailQuery ? ` (query: ${gmailQuery})` : ''}`);
   console.error('');
 
   // Ensure directories
@@ -300,52 +492,80 @@ async function main() {
   fs.mkdirSync(invoicesDir, { recursive: true });
 
   let entries: ManifestEntry[] = [];
+  let autoCollected = false;
 
+  // === Drive Collection ===
   if (sourceMode === 'drive' && driveFolderId) {
-    console.error('[1/2] Collecting from Google Drive...');
-
-    // Check for period-specific subfolder first
+    console.error('[Auto] Collecting from Google Drive...');
     const periodFolder = await findPeriodSubfolder(driveFolderId, args.period);
     const targetFolder = periodFolder || driveFolderId;
-
     const driveEntries = await collectFromDrive(targetFolder, invoicesDir, args.period);
     entries.push(...driveEntries);
+    autoCollected = true;
+  }
 
-    // Also scan for any manually added local files
-    console.error('[2/2] Scanning local files...');
-    const localEntries = scanLocalInvoices(invoicesDir).filter(
-      e => !entries.some(d => d.file === e.file)
-    );
-    entries.push(...localEntries);
-    if (localEntries.length > 0) {
-      console.error(`  ${localEntries.length} additional local files found`);
+  // === Gmail Collection ===
+  if (sourceMode === 'gmail' && gmailQuery) {
+    console.error('[Auto] Collecting from Gmail...');
+    try {
+      const gmailEntries = await collectFromGmail(gmailQuery, invoicesDir, args.period);
+      entries.push(...gmailEntries);
+      autoCollected = true;
+    } catch (err: any) {
+      console.error(`  Gmail collection failed: ${err.message}`);
+      console.error('  Falling back to local scan.');
     }
-  } else {
-    console.error('[1/1] Scanning local invoices...');
-    entries = scanLocalInvoices(invoicesDir);
+  }
 
-    if (entries.length === 0) {
-      console.error(`\n  No invoices found in ${invoicesDir}`);
-      console.error(`  Please place PDF/image files there and re-run.`);
+  // === Bakuraku Collection ===
+  if (sourceMode === 'bakuraku') {
+    if (args.bakurakuToken) {
+      console.error('[Auto] Collecting from Bakuraku...');
+      try {
+        const bakurakuEntries = await collectFromBakuraku(args.bakurakuToken, invoicesDir, args.period);
+        entries.push(...bakurakuEntries);
+        autoCollected = true;
+      } catch (err: any) {
+        console.error(`  Bakuraku collection failed: ${err.message}`);
+        console.error('  Falling back to local scan.');
+      }
+    } else {
+      console.error('[Skip] Bakuraku: no token (set BAKURAKU_TOKEN env or --bakuraku-token)');
+    }
+  }
 
-      if (config.driveFolderId) {
-        console.error(`\n  Tip: This client has a Drive folder configured.`);
-        console.error(`  Run with --source auto to download from Drive:`);
-        console.error(`    npx tsx collect.ts ${args.workDir} ${args.refFile} --source auto`);
-      }
-      if (config.bakurakuUrl) {
-        console.error(`\n  Tip: This client uses Bakuraku.`);
-        console.error(`  Export invoices from: ${config.bakurakuUrl}`);
-      }
+  // === Always scan local files (catch manual additions) ===
+  console.error(`[Local] Scanning ${invoicesDir}...`);
+  const localEntries = scanLocalInvoices(invoicesDir).filter(
+    e => !entries.some(d => d.file === e.file)
+  );
+  entries.push(...localEntries);
+  if (localEntries.length > 0) {
+    console.error(`  ${localEntries.length} additional local files found`);
+  }
+
+  // === Hints if nothing collected ===
+  if (entries.length === 0) {
+    console.error(`\n  No invoices found.`);
+    console.error(`  Place PDF/image files in: ${invoicesDir}`);
+    if (config.driveFolderId && sourceMode !== 'drive') {
+      console.error(`  Or run with: --source drive:${config.driveFolderId}`);
+    }
+    if (config.bakurakuUrl && sourceMode !== 'bakuraku') {
+      console.error(`  Or run with: --source bakuraku (requires BAKURAKU_TOKEN)`);
+    }
+    if (config.gmailQuery && sourceMode !== 'gmail') {
+      console.error(`  Or run with: --source gmail:"${config.gmailQuery}"`);
     }
   }
 
   // Generate manifest
+  const sources = [...new Set(entries.map(e => e.source))];
   const manifest: Manifest = {
     collectedAt: new Date().toISOString(),
     period: args.period,
-    method: entries.some(e => e.source === 'drive') ? 'auto' : 'manual',
-    source: sourceMode === 'drive' ? `drive:${driveFolderId}` : 'local',
+    method: autoCollected ? (localEntries.length > 0 ? 'hybrid' : 'auto') : 'manual',
+    source: sources.join('+') || 'local',
     totalCount: entries.length,
     invoices: entries,
   };
