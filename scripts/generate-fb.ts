@@ -94,11 +94,25 @@ function parseSenderFromRef(refPath: string) {
 
 const sender = parseSenderFromRef(refFile);
 
-// Parse regular vendors from reference (for #24 new code determination)
+// Parse reference for tool info and regular vendors
+let paymentTool = '';   // bakuraku, mf-shiharai, freee, mf-kaikei, yayoi, bugyo, etc.
+let toolApiAvailable = false;
+let toolManualInstructions = '';
 const regularVendors: Record<string, boolean> = {};
+
 if (refFile && fs.existsSync(refFile)) {
   const refContent = fs.readFileSync(refFile, 'utf-8');
-  const vendorSection = refContent.match(/### 定期取引先[\s\S]*?(?=\n##|\n---)/m);
+
+  // Parse tool from section 0
+  const toolMatch = refContent.match(/- tool:\s*"(.+?)"/);
+  if (toolMatch) paymentTool = toolMatch[1].toLowerCase();
+  const apiMatch = refContent.match(/- apiAvailable:\s*(true|false)/);
+  if (apiMatch) toolApiAvailable = apiMatch[1] === 'true';
+  const instrMatch = refContent.match(/- manualInstructions:\s*\|\n([\s\S]*?)(?=\n---|\n##)/);
+  if (instrMatch) toolManualInstructions = instrMatch[1].replace(/^    /gm, '').trim();
+
+  // Parse regular vendors for new code determination
+  const vendorSection = refContent.match(/### 定期取引先[\s\S]*?(?=\n##|\n---|$)/m);
   if (vendorSection) {
     for (const line of vendorSection[0].split('\n')) {
       if (!line.startsWith('|') || line.includes('---')) continue;
@@ -107,6 +121,43 @@ if (refFile && fs.existsSync(refFile)) {
     }
   }
 }
+
+// Normalize tool name to a canonical key
+function resolveToolKey(tool: string): string {
+  if (/bakuraku|バクラク/i.test(tool)) return 'bakuraku';
+  if (/mf.*債務|mf.*shiharai|moneyforward.*債務/i.test(tool)) return 'mf-shiharai';
+  if (/freee/i.test(tool)) return 'freee';
+  if (/mf|moneyforward|マネーフォワード/i.test(tool)) return 'mf-kaikei';
+  if (/弥生|yayoi/i.test(tool)) return 'yayoi';
+  if (/奉行|bugyo/i.test(tool)) return 'bugyo';
+  if (/ics/i.test(tool)) return 'ics';
+  if (/tkc/i.test(tool)) return 'tkc';
+  if (/pca/i.test(tool)) return 'pca';
+  return 'unknown';
+}
+
+// For compound tools like "bakuraku + moneyforward", detect the primary payment tool
+function detectPrimaryPaymentTool(tool: string): string {
+  const parts = tool.split(/[+＋,、]/).map(s => s.trim());
+  // Priority: bakuraku > mf-shiharai > freee > others (bakuraku handles payment flow)
+  for (const p of parts) {
+    const key = resolveToolKey(p);
+    if (key === 'bakuraku') return 'bakuraku';
+  }
+  for (const p of parts) {
+    const key = resolveToolKey(p);
+    if (key === 'mf-shiharai') return 'mf-shiharai';
+  }
+  for (const p of parts) {
+    const key = resolveToolKey(p);
+    if (key === 'freee') return 'freee';
+  }
+  // Default: first tool
+  return resolveToolKey(parts[0] || '');
+}
+
+const primaryTool = detectPrimaryPaymentTool(paymentTool);
+console.log(`会計ツール: ${paymentTool} → primary: ${primaryTool} (API: ${toolApiAvailable})`);
 
 // NG除外
 const okResults = checkResult.results.filter((r: any) => r.overallStatus !== 'NG');
@@ -224,5 +275,145 @@ console.log(`\nFB: ${fbPath}`);
 
 // Summary
 const excluded = checkResult.results.filter((r: any) => r.overallStatus === 'NG');
-const summary = `# 振込サマリ\n\n生成: ${new Date().toISOString()}\n\n| # | 取引先 | 金額 |\n|---|--------|------|\n${validRecords.map((r, i) => `| ${i + 1} | ${r.vendorName} | ¥${r.amount.toLocaleString()} |`).join('\n')}\n\n合計: ${validRecords.length}件 ¥${totalAmount.toLocaleString()}\n\n## 除外\n${excluded.map((r: any) => `- ${r.invoiceId} ${r.vendorName} ¥${r.totalAmount.toLocaleString()} — ${r.checks.find((c: any) => c.status === 'NG')?.message}`).join('\n') || 'なし'}\n`;
+
+// Tool-specific instructions for accounting system integration
+const TOOL_INSTRUCTIONS: Record<string, { name: string; apiStatus: string; manualSteps: string }> = {
+  'bakuraku': {
+    name: 'バクラク債権・債務管理',
+    apiStatus: 'API連携可能（支払申請作成）',
+    manualSteps: [
+      '1. バクラク (https://invoice.layerx.jp) にログイン',
+      '2. 「仕訳・支払」→「処理中」画面を開く',
+      '3. 各請求書のPDFをアップロードし、支払申請を作成',
+      '4. 承認フローに従い承認',
+      '5. 「振込データ出力」から総合振込データをダウンロード',
+      '   ※ 生成済みの _payment.fb.txt を使用する場合はこのステップ不要',
+    ].join('\n'),
+  },
+  'mf-shiharai': {
+    name: 'マネーフォワード債務支払',
+    apiStatus: 'API未成熟（手動操作）',
+    manualSteps: [
+      '1. MF債務支払 にログイン',
+      '2. 「申請」→「支払依頼」→「新規申請」',
+      '3. 請求書PDFを一括アップロード',
+      '4. 各請求書の支払情報（金額・振込先・期日）を確認',
+      '5. 承認フローに従い承認',
+      '6. 「振込データ作成」から総合振込データをダウンロード',
+      '   ※ 生成済みの _payment.fb.txt を使用する場合はこのステップ不要',
+    ].join('\n'),
+  },
+  'freee': {
+    name: 'freee会計',
+    apiStatus: 'API連携可能（取引登録・振込データ）※未実装',
+    manualSteps: [
+      '1. freee会計にログイン',
+      '2. 「取引」→「取引の一覧・登録」で各請求書を登録',
+      '   - 取引先マスタに振込先口座が登録されていることを確認',
+      '3. 「支払管理レポート」で合計金額・件数を確認',
+      '4. 「振込データの作成」→ CSV/全銀フォーマットでエクスポート',
+      '   ※ 生成済みの _payment.fb.txt を使用する場合はこのステップ不要',
+    ].join('\n'),
+  },
+  'mf-kaikei': {
+    name: 'マネーフォワード会計',
+    apiStatus: 'API未成熟（CSVインポート）',
+    manualSteps: [
+      '1. MF会計にログイン',
+      '2. 「仕訳帳」→「インポート」→「仕訳帳」',
+      '3. 費用計上CSVをインポート',
+      '4. 振込は _payment.fb.txt を銀行IBにアップロードして実行',
+    ].join('\n'),
+  },
+  'yayoi': {
+    name: '弥生会計',
+    apiStatus: '手動操作のみ',
+    manualSteps: [
+      '1. 弥生会計を開く',
+      '2. 「振替伝票」で各請求書の仕訳を入力',
+      '3. 振込は _payment.fb.txt を銀行IBにアップロードして実行',
+    ].join('\n'),
+  },
+  'bugyo': {
+    name: '勘定奉行 / 商蔵奉行',
+    apiStatus: '手動操作のみ',
+    manualSteps: [
+      '1. 奉行シリーズを開く',
+      '2. 「支払管理」で支払データを登録',
+      '3. 振込は _payment.fb.txt を銀行IBにアップロードして実行',
+    ].join('\n'),
+  },
+  'ics': {
+    name: 'ICS会計',
+    apiStatus: '手動操作のみ',
+    manualSteps: [
+      '1. ICS会計システムにログイン',
+      '2. 仕訳データを手動入力',
+      '3. 振込は _payment.fb.txt を銀行IBにアップロードして実行',
+    ].join('\n'),
+  },
+  'tkc': {
+    name: 'TKC会計',
+    apiStatus: '手動操作のみ',
+    manualSteps: [
+      '1. TKCシステムにログイン',
+      '2. 仕訳データを手動入力',
+      '3. 振込は _payment.fb.txt を銀行IBにアップロードして実行',
+    ].join('\n'),
+  },
+  'pca': {
+    name: 'PCA会計',
+    apiStatus: '手動操作のみ',
+    manualSteps: [
+      '1. PCA会計を開く',
+      '2. 仕訳データを手動入力',
+      '3. 振込は _payment.fb.txt を銀行IBにアップロードして実行',
+    ].join('\n'),
+  },
+  'unknown': {
+    name: '会計ツール未特定',
+    apiStatus: '手動操作',
+    manualSteps: [
+      '会計ツールが特定できませんでした。',
+      'リファレンスの Section 0「会計ツール」を更新してください。',
+      '振込は _payment.fb.txt を銀行IBにアップロードして実行してください。',
+    ].join('\n'),
+  },
+};
+
+const toolInfo = TOOL_INSTRUCTIONS[primaryTool] || TOOL_INSTRUCTIONS['unknown'];
+
+// If reference has custom manual instructions, use those instead
+const instructions = toolManualInstructions || toolInfo.manualSteps;
+
+const summary = [
+  `# 振込サマリ`,
+  ``,
+  `生成: ${new Date().toISOString()}`,
+  `会計ツール: ${toolInfo.name} (${toolInfo.apiStatus})`,
+  ``,
+  `| # | 取引先 | 金額 |`,
+  `|---|--------|------|`,
+  ...validRecords.map((r, i) => `| ${i + 1} | ${r.vendorName} | ¥${r.amount.toLocaleString()} |`),
+  ``,
+  `合計: ${validRecords.length}件 ¥${totalAmount.toLocaleString()}`,
+  ``,
+  `## 会計ツール連携手順（${toolInfo.name}）`,
+  ``,
+  instructions,
+  ``,
+  `## 除外`,
+  excluded.map((r: any) => `- ${r.invoiceId} ${r.vendorName} ¥${r.totalAmount?.toLocaleString()} — ${r.checks?.find((c: any) => c.status === 'NG')?.message}`).join('\n') || 'なし',
+  ``,
+].join('\n');
+
 fs.writeFileSync(path.join(workDir, '_payment-summary.md'), summary);
+
+// Output tool integration info as JSON for SKILL.md to use
+const integrationInfo = {
+  primaryTool,
+  toolName: toolInfo.name,
+  apiAvailable: toolApiAvailable,
+  apiStatus: toolInfo.apiStatus,
+};
+fs.writeFileSync(path.join(workDir, '_tool-integration.json'), JSON.stringify(integrationInfo, null, 2));

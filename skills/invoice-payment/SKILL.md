@@ -279,13 +279,32 @@ npx tsx {SCRIPTS}/generate-fb.ts {WORK_DIR} {REF_FILE}
 ```
 → AskUserQuestion で確認。承認されなければ中断。
 
-### 会計ツール連携（リファレンスに apiAvailable: true の場合）
+### 会計ツール連携
 
-リファレンスの `importMethod` に従ってAPI操作を実行:
-- バクラクの場合:
-  1. 各請求書PDFを `POST /workflow/user_upload_files` でアップロード
-  2. `POST /workflow/requests` で支払申請を作成（status: IN_PROGRESS）
-- apiAvailable: false の場合: `manualInstructions` の内容をユーザーに表示
+`_tool-integration.json` と `_payment-summary.md` を Read で読み込み、ツール別に処理する。
+
+generate-fb.ts が自動判定した `primaryTool` に基づいて分岐:
+
+| primaryTool | ツール名 | API連携 | 処理 |
+|---|---|---|---|
+| `bakuraku` | バクラク債権・債務管理 | **可能** | `POST /workflow/requests` で支払申請作成 |
+| `mf-shiharai` | MF債務支払 | 未成熟 | 手動操作手順を案内 |
+| `freee` | freee会計 | **可能（未実装）** | 手動操作手順を案内（将来API化） |
+| `mf-kaikei` | MF会計 | CSV | CSVインポート手順を案内 |
+| `yayoi` | 弥生会計 | 手動 | 手動入力手順を案内 |
+| `bugyo` | 勘定奉行 | 手動 | 手動入力手順を案内 |
+| `ics` | ICS会計 | 手動 | 手動入力手順を案内 |
+| `tkc` | TKC会計 | 手動 | 手動入力手順を案内 |
+| `pca` | PCA会計 | 手動 | 手動入力手順を案内 |
+| `unknown` | 未特定 | — | 3段フォールバック |
+
+#### バクラク（apiAvailable: true の場合）
+1. 各請求書PDFを `POST /workflow/user_upload_files` でアップロード
+2. `POST /workflow/requests` で支払申請を作成（status: IN_PROGRESS）
+
+#### その他全ツール（apiAvailable: false の場合）
+`_payment-summary.md` の「会計ツール連携手順」セクションをそのままユーザーに表示。
+リファレンスに `manualInstructions` がカスタム記載されている場合はそちらを優先。
 
 ---
 
