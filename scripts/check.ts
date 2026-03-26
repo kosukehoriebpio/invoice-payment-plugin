@@ -192,13 +192,21 @@ for (const inv of invoices) {
   }
 
   // 4. 支払期日チェック
-  const today = new Date();
-  const due = new Date(inv.dueDate);
-  if (due < today) {
-    checks.push({ checkType: 'due_date', status: 'WARN', message: `期日超過: ${inv.dueDate}` });
+  if (!inv.dueDate) {
+    checks.push({ checkType: 'due_date', status: 'WARN', message: '支払期日が未記載' });
     if (overallStatus === 'OK') overallStatus = 'WARN';
   } else {
-    checks.push({ checkType: 'due_date', status: 'OK', message: `期日 ${inv.dueDate}` });
+    const today = new Date();
+    const due = new Date(inv.dueDate);
+    if (isNaN(due.getTime())) {
+      checks.push({ checkType: 'due_date', status: 'WARN', message: `支払期日の形式不正: ${inv.dueDate}` });
+      if (overallStatus === 'OK') overallStatus = 'WARN';
+    } else if (due < today) {
+      checks.push({ checkType: 'due_date', status: 'WARN', message: `期日超過: ${inv.dueDate}` });
+      if (overallStatus === 'OK') overallStatus = 'WARN';
+    } else {
+      checks.push({ checkType: 'due_date', status: 'OK', message: `期日 ${inv.dueDate}` });
+    }
   }
 
   // 5. 高額アラート

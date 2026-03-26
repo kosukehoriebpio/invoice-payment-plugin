@@ -354,6 +354,13 @@ async function collectFromGmail(query: string, invoicesDir: string, period: stri
 
         // Decode base64url
         const buffer = Buffer.from(data, 'base64url');
+
+        // Skip oversized attachments (20MB limit to prevent accidental bulk download)
+        if (buffer.length > 20 * 1024 * 1024) {
+          console.error(`  ✗ ${part.filename}: skipped (${(buffer.length / 1024 / 1024).toFixed(1)}MB exceeds 20MB limit)`);
+          continue;
+        }
+
         const safeName = part.filename.replace(/[<>:"/\\|?*]/g, '_');
 
         // Avoid duplicates by adding message ID prefix if needed

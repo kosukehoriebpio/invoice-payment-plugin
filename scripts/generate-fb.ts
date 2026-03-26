@@ -72,8 +72,9 @@ function parseSenderFromRef(refPath: string) {
   const dayMatch = paymentDateStr.match(/(\d+)日/);
   if (dayMatch) {
     const now = new Date();
-    const month = String(now.getMonth() + 2).padStart(2, '0'); // 翌月
-    paymentDate = month + dayMatch[1].padStart(2, '0');
+    // 翌月を計算（12月→1月の跨ぎに対応）
+    const nextMonth = (now.getMonth() + 1) % 12 + 1; // 1-12
+    paymentDate = String(nextMonth).padStart(2, '0') + dayMatch[1].padStart(2, '0');
   }
 
   return {

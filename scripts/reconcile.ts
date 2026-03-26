@@ -74,7 +74,16 @@ async function main() {
   }
 
   for (const auto of checkResult.autoAdditions || []) {
-    const match = transfers.find((t: Transfer) => t.amount === auto.totalAmount && !matched.has(t.id));
+    const autoName = normName(auto.vendorName);
+    const match = transfers.find((t: Transfer) => {
+      if (matched.has(t.id)) return false;
+      if (t.amount !== auto.totalAmount) return false;
+      if (t.recipientName && autoName) {
+        const tName = normName(t.recipientName);
+        return tName.includes(autoName) || autoName.includes(tName) || tName === autoName;
+      }
+      return true;
+    });
     if (match) {
       matched.add(match.id);
       results.push({ invoiceId: `auto-${auto.vendorName}`, vendorName: auto.vendorName, invoiceAmount: auto.totalAmount, transferId: match.id, transferAmount: match.amount, transferStatus: match.status, reconcileStatus: match.status === 'completed' ? 'OK' : 'WARN', message: match.status === 'completed' ? '消込OK（定期）' : `振込${match.status}` });

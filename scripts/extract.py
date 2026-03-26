@@ -380,12 +380,7 @@ def extract_single_pdf(file_path: str, invoice_id: str) -> dict:
         if len(dates) >= 2:
             result["dueDate"] = dates[-1]  # Last date = due date (heuristic)
 
-    # Amounts — look for labeled amounts first
-    # Normalize CJK compatibility ideographs before amount search
-    # Common in PDF: ⾦→金, ⾷→食, ⼝→口, ⼩→小, ⽀→支, ⽇→日, etc.
-    import unicodedata
-    norm_text = unicodedata.normalize("NFKC", full_text)
-
+    # Amounts — look for labeled amounts first (norm_text already NFKC-normalized above)
     total = find_labeled_amount(norm_text, r"(?:合\s*計|総\s*額|ご請求金額|請求金額|お支払い?金額)")
     subtotal = find_labeled_amount(norm_text, r"(?:小\s*計|税抜[き]?金額|税抜合計)")
     tax = find_labeled_amount(norm_text, r"(?:消費税|税\s*額|うち消費税)")
