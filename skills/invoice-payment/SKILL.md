@@ -84,6 +84,8 @@ cd .invoice-payment-references && git pull --ff-only && cd ..
 mkdir -p {WORK_DIR}/invoices
 ```
 
+作成後、`{WORK_DIR}` の**絶対パス**を確定し、以降の全ステップでファイルパスをユーザーに伝える際は必ず絶対パスで表示すること。相対パスや変数名のままではユーザーがファイルを見つけられない。
+
 ---
 
 ## Step 1: 請求書収集（collect）
@@ -131,7 +133,12 @@ Drive収集後に「他に手動で追加する請求書はありますか？」
 追加がある場合は `{WORK_DIR}/invoices/` に手動配置後、再度スクリプトを実行。
 
 ### 収集完了後
-スクリプトが `_manifest.json` を `{WORK_DIR}/` に生成:
+スクリプトが `_manifest.json` を `{WORK_DIR}/` に生成する。
+手動配置モードの場合、ユーザーに配置先のフルパスを明示すること:
+```
+請求書PDFを以下のフォルダに配置してください:
+  {WORK_DIR の絶対パス}/invoices/
+```
 
 ```json
 {
@@ -270,12 +277,19 @@ npx tsx {SCRIPTS}/generate-fb.ts {WORK_DIR} {REF_FILE}
 
 ### 振込サマリの確認
 
-`_payment-summary.md` を Read で読み込み、ユーザーに表示:
-```
-「以下の振込データを作成しました:
- {サマリの内容}
+`_payment-summary.md` を Read で読み込み、ユーザーに表示する。
+**生成されたファイルのフルパスを必ず明示すること**（ユーザーがファイルを見つけられるように）:
 
- 振込実行に進みますか？」
+```
+以下の振込データを作成しました:
+
+{サマリの内容}
+
+📁 生成ファイル:
+  FBファイル: {WORK_DIR の絶対パス}/_payment.fb.txt
+  振込サマリ: {WORK_DIR の絶対パス}/_payment-summary.md
+
+振込実行に進みますか？
 ```
 → AskUserQuestion で確認。承認されなければ中断。
 
@@ -323,7 +337,9 @@ APIやPlaywright等による銀行IBの自動操作は禁止。
 【振込実行手順】
 1. {bankingSystem} にログイン
 2. {リファレンスのinstructionsをそのまま表示}
-3. アップロードするファイル: {WORK_DIR}/_payment.fb.txt
+3. アップロードするファイル:
+   {WORK_DIR の絶対パス}/_payment.fb.txt
+   ※ エクスプローラーで上記パスを開いてファイルを取得してください
 4. 振込件数: {N}件 / 合計金額: ¥{total}
 
 完了したら教えてください。
