@@ -12,7 +12,7 @@
  *   --source local              WORK_DIR/invoices/ を手動配置前提でスキャン
  *   --source auto               リファレンスの設定から自動判定（デフォルト）
  *   --period <YYYY-MM>          対象年月（デフォルト: 当月）
- *   --bakuraku-token <token>    バクラクAPIトークン（default: BAKURAKU_TOKEN env）
+ *   (BAKURAKU_TOKEN env)         バクラクAPIトークン（CLIオプションでの指定は不可 — セキュリティ上の理由）
  *
  * リファレンスの source フォーマット例:
  *   "Google Drive フォルダID: 15PaMhjpiPdFVqTRaEJD5mHKpibDL4nRQ"
@@ -75,7 +75,7 @@ function parseArgs(): CollectArgs {
   for (let i = 2; i < args.length; i++) {
     if (args[i] === '--source') result.sourceOverride = args[++i];
     if (args[i] === '--period') result.period = args[++i];
-    if (args[i] === '--bakuraku-token') result.bakurakuToken = args[++i];
+    // --bakuraku-token removed: tokens must not appear in CLI args (visible via ps)
   }
 
   return result;
@@ -138,12 +138,16 @@ function parseReference(refPath: string): CollectionConfig {
 // Google Drive Collection
 // ============================================================
 
+let _driveClient: any = null;
+
 async function loadGoogleAuth() {
-  // Dynamic import to avoid hard dependency — only needed for Drive mode
+  // Cache the Drive client to avoid re-auth on repeated calls
+  if (_driveClient) return _driveClient;
   const { google } = await import('googleapis');
   const authModule = await import('../../integrations/lib/auth');
   const auth = await authModule.getAuthClient();
-  return google.drive({ version: 'v3', auth });
+  _driveClient = google.drive({ version: 'v3', auth });
+  return _driveClient;
 }
 
 async function collectFromDrive(folderId: string, invoicesDir: string, period: string): Promise<ManifestEntry[]> {
@@ -158,7 +162,12 @@ async function collectFromDrive(folderId: string, invoicesDir: string, period: s
     'image/png',
     'image/jpeg',
   ];
-  const query = `'${folderId}' in parents and trashed = false and (${mimeTypes.map(m => `mimeType='${m}'`).join(' or ')})`;
+  // Sanitize folderId to prevent query injection (allow only alphanumeric, hyphen, underscore)
+  const safeFolderId = folderId.replace(/[^a-zA-Z0-9_-]/g, '');
+  if (safeFolderId !== folderId) {
+    console.error(`  WARN: folderId sanitized: ${folderId} → ${safeFolderId}`);
+  }
+  const query = `'${safeFolderId}' in parents and trashed = false and (${mimeTypes.map(m => `mimeType='${m}'`).join(' or ')})`;
 
   const entries: ManifestEntry[] = [];
   let pageToken: string | undefined;
@@ -254,8 +263,9 @@ async function findPeriodSubfolder(folderId: string, period: string): Promise<st
       `${year}年${monthNum}月`,
     ];
 
+    const safeFid = folderId.replace(/[^a-zA-Z0-9_-]/g, '');
     const res = await drive.files.list({
-      q: `'${folderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed = false`,
+      q: `'${safeFid}' in parents and mimeType='application/vnd.google-apps.folder' and trashed = false`,
       fields: 'files(id, name)',
       pageSize: 50,
     });
@@ -279,11 +289,15 @@ async function findPeriodSubfolder(folderId: string, period: string): Promise<st
 // Gmail Collection
 // ============================================================
 
+let _gmailClient: any = null;
+
 async function loadGmailClient() {
+  if (_gmailClient) return _gmailClient;
   const { google } = await import('googleapis');
   const authModule = await import('../../integrations/lib/auth');
   const auth = await authModule.getAuthClient();
-  return google.gmail({ version: 'v1', auth });
+  _gmailClient = google.gmail({ version: 'v1', auth });
+  return _gmailClient;
 }
 
 async function collectFromGmail(query: string, invoicesDir: string, period: string): Promise<ManifestEntry[]> {
@@ -310,6 +324,7 @@ async function collectFromGmail(query: string, invoicesDir: string, period: stri
   const messages = listRes.data.messages || [];
   console.error(`  Found ${messages.length} messages`);
 
+  // Process sequentially to respect Gmail API rate limits (250 quota units/sec)
   for (const msg of messages) {
     if (!msg.id) continue;
 

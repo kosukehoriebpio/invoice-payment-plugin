@@ -325,6 +325,8 @@ def extract_single_pdf(file_path: str, invoice_id: str) -> dict:
     }
 
     try:
+        # Note: each PDF is opened/closed individually. For typical invoice volumes
+        # (10-30/month) this is fine. If processing 100+ files, consider batching.
         pdf = pdfplumber.open(file_path)
     except Exception as e:
         result["extraction_method"] = "vision_required"
@@ -387,6 +389,15 @@ def extract_single_pdf(file_path: str, invoice_id: str) -> dict:
     total = find_labeled_amount(norm_text, r"(?:合\s*計|総\s*額|ご請求金額|請求金額|お支払い?金額)")
     subtotal = find_labeled_amount(norm_text, r"(?:小\s*計|税抜[き]?金額|税抜合計)")
     tax = find_labeled_amount(norm_text, r"(?:消費税|税\s*額|うち消費税)")
+
+    # Also try "合計（税込）\341,000" pattern (label then yen on same line)
+    if not total:
+        combo_pattern = re.compile(
+            r"(?:合\s*計|ご請求金額|請求金額).*?[¥￥\\]\s*([\d,]+)", re.IGNORECASE
+        )
+        m = combo_pattern.search(norm_text)
+        if m:
+            total = parse_amount(m.group(1))
 
     if total:
         result["totalAmount"] = total
@@ -458,6 +469,11 @@ def main():
         if sys.argv[i] == "--manifest" and i + 1 < len(sys.argv):
             manifest_name = sys.argv[i + 1]
 
+    # Path traversal guard
+    if ".." in work_dir:
+        print(f"Security: workDir must not contain '..'. Got: {work_dir}", file=sys.stderr)
+        sys.exit(1)
+
     manifest_path = os.path.join(work_dir, manifest_name)
 
     # Load manifest
@@ -490,8 +506,15 @@ def main():
     vision_required = []
     total_amount = 0
 
+    work_dir_abs = os.path.abspath(work_dir)
+
     for i, file_path in enumerate(files):
         inv_id = f"inv-{i + 1:03d}"
+        abs_file = os.path.abspath(file_path)
+        # Path traversal guard: file must be under work_dir
+        if not abs_file.startswith(work_dir_abs):
+            print(f"\n  SKIP {file_path}: outside work directory", file=sys.stderr)
+            continue
         rel_path = os.path.relpath(file_path, work_dir).replace("\\", "/")
         ext = os.path.splitext(file_path)[1].lower()
 

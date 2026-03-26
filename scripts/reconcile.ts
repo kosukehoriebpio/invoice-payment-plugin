@@ -2,17 +2,26 @@
  * Step 6: 消込確認
  * モックAPI（or 実API）の振込結果と_check-result.json/_extracted.jsonを突合
  *
- * Usage: npx tsx plugins/invoice-payment/scripts/reconcile.ts <workDir> [apiUrl]
- * Default apiUrl: http://localhost:3099
+ * Usage: npx tsx plugins/invoice-payment/scripts/reconcile.ts <workDir> <apiUrl>
  */
 
 import fs from 'fs';
 import path from 'path';
 
 const workDir = process.argv[2];
-const apiUrl = process.argv[3] || 'http://localhost:3099';
+const apiUrl = process.argv[3];
 
-if (!workDir) { console.error('Usage: npx tsx reconcile.ts <workDir> [apiUrl]'); process.exit(1); }
+if (!workDir || !apiUrl) {
+  console.error('Usage: npx tsx reconcile.ts <workDir> <apiUrl>');
+  console.error('  apiUrl is required (no default — specify explicitly)');
+  process.exit(1);
+}
+
+// Only allow http(s) URLs
+if (!/^https?:\/\//i.test(apiUrl)) {
+  console.error(`Security: apiUrl must be http(s). Got: ${apiUrl}`);
+  process.exit(1);
+}
 
 interface Transfer { id: string; recipientName: string; amount: number; status: string; createdAt: string; completedAt?: string; }
 
@@ -36,8 +45,26 @@ async function main() {
   const matched = new Set<string>();
   const results: any[] = [];
 
+  // Normalize name for fuzzy matching (strip spaces, lowercase kana)
+  function normName(s: string): string {
+    return (s || '').replace(/[\s　\(\)（）]/g, '').toLowerCase();
+  }
+
   for (const inv of okInvoices) {
-    const match = transfers.find((t: Transfer) => t.amount === inv.totalAmount && !matched.has(t.id));
+    // Match by amount + recipient name (fuzzy)
+    const invName = normName(inv.vendorName);
+    const match = transfers.find((t: Transfer) => {
+      if (matched.has(t.id)) return false;
+      if (t.amount !== inv.totalAmount) return false;
+      // If recipient name is available, verify it matches
+      if (t.recipientName && invName) {
+        const tName = normName(t.recipientName);
+        // Either contains the other (handles カ）エーショクヒンオロシ vs 株式会社A食品卸)
+        return tName.includes(invName) || invName.includes(tName) || tName === invName;
+      }
+      // If no name on transfer, fall back to amount-only match
+      return true;
+    });
     if (match) {
       matched.add(match.id);
       results.push({ invoiceId: inv.invoiceId, vendorName: inv.vendorName, invoiceAmount: inv.totalAmount, transferId: match.id, transferAmount: match.amount, transferStatus: match.status, reconcileStatus: match.status === 'completed' ? 'OK' : 'WARN', message: match.status === 'completed' ? '消込OK' : `振込${match.status}` });

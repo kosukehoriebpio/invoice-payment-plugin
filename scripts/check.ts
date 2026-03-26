@@ -143,12 +143,20 @@ for (const inv of invoices) {
   let overallStatus: 'OK' | 'WARN' | 'NG' = 'OK';
 
   // 1. 二重請求チェック
-  const dupes = invoices.filter(o =>
-    o.id !== inv.id && o.vendorName === inv.vendorName
-    && o.totalAmount === inv.totalAmount && o.invoiceNumber === inv.invoiceNumber
-  );
+  // invoiceNumber が空の場合は請求書番号での突合をスキップし、
+  // vendorName + totalAmount + invoiceDate の組み合わせで判定する
+  const dupes = invoices.filter(o => {
+    if (o.id === inv.id) return false;
+    if (o.vendorName !== inv.vendorName || o.totalAmount !== inv.totalAmount) return false;
+    // Both have invoiceNumber → must match
+    if (inv.invoiceNumber && o.invoiceNumber) return o.invoiceNumber === inv.invoiceNumber;
+    // invoiceNumber unavailable → fall back to date match
+    if (inv.invoiceDate && o.invoiceDate) return o.invoiceDate === inv.invoiceDate;
+    // No reliable secondary key → don't flag as duplicate
+    return false;
+  });
   if (dupes.length > 0) {
-    checks.push({ checkType: 'duplicate', status: 'NG', message: `二重請求: ${dupes.map(d => d.id).join(',')}と同一（${inv.invoiceNumber}）` });
+    checks.push({ checkType: 'duplicate', status: 'NG', message: `二重請求: ${dupes.map(d => d.id).join(',')}と同一（${inv.invoiceNumber || inv.invoiceDate || '番号不明'}）` });
     overallStatus = 'NG';
   } else {
     checks.push({ checkType: 'duplicate', status: 'OK', message: '二重請求なし' });
@@ -201,11 +209,18 @@ for (const inv of invoices) {
   // 6. 源泉徴収チェック
   if (withholdingVendors.includes(inv.vendorName)) {
     if (inv.withholdingTax > 0) {
-      const expected = Math.floor(inv.subtotal * 0.1021);
+      // 100万以下: 10.21%, 100万超: 超過分に20.42%
+      const base = inv.subtotal;
+      let expected: number;
+      if (base <= 1_000_000) {
+        expected = Math.floor(base * 0.1021);
+      } else {
+        expected = Math.floor(1_000_000 * 0.1021 + (base - 1_000_000) * 0.2042);
+      }
       if (Math.abs(inv.withholdingTax - expected) <= 1) {
         checks.push({ checkType: 'withholding_tax', status: 'OK', message: `源泉¥${inv.withholdingTax.toLocaleString()} OK` });
       } else {
-        checks.push({ checkType: 'withholding_tax', status: 'WARN', message: `源泉不一致: ¥${inv.withholdingTax} vs 計算¥${expected}` });
+        checks.push({ checkType: 'withholding_tax', status: 'WARN', message: `源泉不一致: ¥${inv.withholdingTax.toLocaleString()} vs 計算¥${expected.toLocaleString()}` });
         if (overallStatus === 'OK') overallStatus = 'WARN';
       }
     } else {

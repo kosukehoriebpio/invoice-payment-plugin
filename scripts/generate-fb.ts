@@ -14,6 +14,16 @@ const refFile = process.argv[3];
 
 if (!workDir) { console.error('Usage: npx tsx generate-fb.ts <workDir> [referenceFile]'); process.exit(1); }
 
+// Path traversal guard: workDir must be a relative path without '..'
+if (path.isAbsolute(workDir) && !workDir.startsWith(process.cwd())) {
+  console.error(`Security: workDir must be relative or under cwd. Got: ${workDir}`);
+  process.exit(1);
+}
+if (workDir.includes('..')) {
+  console.error(`Security: workDir must not contain '..'. Got: ${workDir}`);
+  process.exit(1);
+}
+
 const checkResult = JSON.parse(fs.readFileSync(path.join(workDir, '_check-result.json'), 'utf-8'));
 const extracted = JSON.parse(fs.readFileSync(path.join(workDir, '_extracted.json'), 'utf-8'));
 
@@ -123,7 +133,22 @@ for (const auto of checkResult.autoAdditions || []) {
 
 const totalAmount = records.reduce((s, r) => s + r.amount, 0);
 console.log(`\n振込: ${records.length}件 合計¥${totalAmount.toLocaleString()}`);
-for (const r of records) console.log(`  ${r.vendorName}: ¥${r.amount.toLocaleString()}`);
+
+// Warn about placeholder branch codes
+const branchWarnings: string[] = [];
+for (const r of records) {
+  console.log(`  ${r.vendorName}: ¥${r.amount.toLocaleString()}`);
+  if (r.branchCode === '000') {
+    branchWarnings.push(r.vendorName);
+  }
+}
+if (branchWarnings.length > 0) {
+  console.warn(`\n[WARN] 以下の取引先の支店コードが未設定（000）です。FBアップロード前に手動で修正が必要:`);
+  for (const v of branchWarnings) console.warn(`  - ${v}`);
+}
+if (sender.branchCode === '000') {
+  console.warn(`[WARN] 振込元の支店コードも未設定（000）です。リファレンスの振込元口座情報を補完してください。`);
+}
 
 // FB生成
 function padRight(str: string, len: number): string {
