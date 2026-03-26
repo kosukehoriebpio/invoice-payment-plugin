@@ -1,6 +1,0 @@
-# Invoice Payment Plugin — Valid Activation Key Hashes
-# Format: one SHA-256 hash per line
-# Generate: node -e "console.log(require('crypto').createHash('sha256').update('KEY').digest('hex'))"
-# To revoke a key: remove its hash from this file
-
-18698bcb02de5235a4ba0e602d521e0da9ba6cc91bf97f49e3df5de19fe41859
