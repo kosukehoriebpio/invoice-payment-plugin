@@ -149,53 +149,83 @@ Write で `{WORK_DIR}/_manifest.json` に保存。
 
 ## Step 2: 請求書読取・データ化（extract）
 
-`_manifest.json` を Read で読み込み、各PDFを順に処理する。
+**2段構え**: Python構造パース（第1段）→ Claude Visionフォールバック（第2段）
 
-### 各PDFの処理手順
+### Step 2-1: PDF構造パース（スクリプト）
 
-1. Read tool でPDFファイルを読み取る（Claude Visionが自動で画像として認識）
-2. リファレンスの「読取ヒント」セクションを参照し、既知取引先の場合はヒントを適用
-3. 以下のフィールドを抽出:
-
-```json
-{
-  "id": "inv-001",
-  "sourceFile": "invoices/xxx.pdf",
-  "vendorName": "取引先名",
-  "invoiceNumber": "請求書番号",
-  "invoiceDate": "YYYY-MM-DD",
-  "dueDate": "YYYY-MM-DD",
-  "subtotal": 0,
-  "taxAmount": 0,
-  "totalAmount": 0,
-  "taxBreakdown": [{ "rate": 0.10, "subtotal": 0, "tax": 0 }],
-  "withholdingTax": null,
-  "bankAccount": {
-    "bankName": "", "branchName": "", "accountType": "普通",
-    "accountNumber": "", "accountHolder": ""
-  },
-  "lineItems": [{ "item": "", "quantity": 0, "unit": "", "unitPrice": 0, "taxRate": 0.10, "amount": 0 }],
-  "registrationNumber": "Txxxxxxxxxx"
-}
+```bash
+python {SCRIPTS}/extract.py {WORK_DIR}
 ```
 
-4. 全件の抽出結果を統合して `_extracted.json` に Write で保存:
+`_manifest.json` 内の全PDFに対し、pdfplumber でテキストレイヤーから構造化抽出を実行。
+以下を自動抽出する:
+- 取引先名、請求書番号、請求日、支払期日
+- 合計金額、小計、消費税額、税率別内訳
+- 源泉徴収税額
+- 振込先口座（銀行名、支店名、口座種別、番号、名義）
+- 明細行（テーブル構造から品名、数量、単価、金額）
+- 適格請求書登録番号（T + 13桁）
+
+各PDFの抽出結果に `confidence` フィールドが付く:
+- **high**: 取引先名・金額ともに構造パースで取得OK
+- **medium**: 金額は取れたが取引先名等が不完全
+- **low**: 金額が推定（文中最大値）
+- **none** (`extraction_method: "vision_required"`): テキストレイヤーなし → Step 2-2 へ
+
+### Step 2-2: Claude Visionフォールバック
+
+`_extracted.json` を Read で読み込み、`visionRequiredIds` に該当するPDFのみ Vision で処理する。
+
+1. 該当PDFを Read tool で読み取る（マルチモーダル自動認識）
+2. リファレンスの「読取ヒント」セクションを参照
+3. Step 2-1 と同じフィールドを抽出し、`_extracted.json` の該当エントリを上書き更新
+4. `extraction_method` を `"vision"` に変更
+
+**Vision不要（全件構造パース済み）の場合はこのステップをスキップ。**
+
+### 抽出結果のフォーマット
 
 ```json
 {
   "extractedAt": "ISO8601",
-  "method": "claude-vision",
-  "totalCount": 0,
-  "invoices": [...]
+  "method": "pdfplumber+vision_fallback",
+  "totalCount": 5,
+  "structureParsed": 4,
+  "visionRequired": 1,
+  "visionRequiredIds": ["inv-003"],
+  "invoices": [
+    {
+      "id": "inv-001",
+      "sourceFile": "invoices/xxx.pdf",
+      "extraction_method": "pdfplumber",
+      "vendorName": "取引先名",
+      "invoiceNumber": "請求書番号",
+      "invoiceDate": "YYYY-MM-DD",
+      "dueDate": "YYYY-MM-DD",
+      "subtotal": 0,
+      "taxAmount": 0,
+      "totalAmount": 0,
+      "taxBreakdown": [{ "rate": 0.10, "subtotal": 0, "tax": 0 }],
+      "withholdingTax": null,
+      "bankAccount": {
+        "bankName": "", "branchName": "", "accountType": "普通",
+        "accountNumber": "", "accountHolder": ""
+      },
+      "lineItems": [{ "item": "", "quantity": 0, "unit": "", "unitPrice": 0, "taxRate": 0.10, "amount": 0 }],
+      "registrationNumber": "Txxxxxxxxxx",
+      "confidence": "high",
+      "warnings": []
+    }
+  ]
 }
 ```
 
 ### 抽出後のサマリ表示
 ```
 === 抽出完了 ===
-{N}件 / 合計¥{total}
-- inv-001: {vendorName} ¥{amount}
-- inv-002: ...
+構造パース: {N1}件 / Vision: {N2}件 / 合計¥{total}
+- inv-001: {vendorName} ¥{amount} [high]
+- inv-002: {vendorName} ¥{amount} [vision]
 ```
 
 ---
