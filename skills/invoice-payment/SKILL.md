@@ -13,6 +13,19 @@ allowed-tools: Read, Bash, Glob, Grep, Write, Edit, AskUserQuestion
 
 ## Step 0: 初期化（必ず最初に実行）
 
+### 0-0. アクティベーション検証（最初に必ず実行）
+
+```bash
+npx tsx {SCRIPTS}/auth.ts
+```
+
+環境変数 `INVOICE_PAYMENT_KEY` を SHA-256 ハッシュで照合する。
+- **認証成功**（exit 0）→ 続行
+- **認証失敗**（exit 1）→ プラグインを停止し、キーの設定方法を案内して終了
+
+**認証に失敗した場合、以降のステップは一切実行しないこと。**
+リファレンスの同期（git clone/pull）も認証成功後にのみ実行する。
+
 ### 0-1. 引数パース
 
 ```
