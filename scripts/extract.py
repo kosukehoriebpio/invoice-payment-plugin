@@ -20,6 +20,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 
@@ -33,8 +34,8 @@ import pdfplumber
 DATE_PATTERNS = [
     # 2026年3月25日, 2026/03/25, 2026-03-25
     (r"(\d{4})\s*[年/\-\.]\s*(\d{1,2})\s*[月/\-\.]\s*(\d{1,2})\s*日?", "{}-{:02d}-{:02d}"),
-    # 令和8年3月25日
-    (r"令和\s*(\d{1,2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日", "reiwa"),
+    # 令和8年3月25日, 令和元年5月1日
+    (r"令和\s*(元|\d{1,2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日", "reiwa"),
 ]
 
 BANK_NAMES_PATTERN = re.compile(
@@ -80,7 +81,8 @@ def parse_all_dates(text: str) -> list[str]:
     for pattern, fmt in DATE_PATTERNS:
         for m in re.finditer(pattern, text):
             if fmt == "reiwa":
-                year = 2018 + int(m.group(1))
+                era_year = 1 if m.group(1) == "元" else int(m.group(1))
+                year = 2018 + era_year
                 dates.append(f"{year}-{int(m.group(2)):02d}-{int(m.group(3)):02d}")
             else:
                 dates.append(fmt.format(int(m.group(1)), int(m.group(2)), int(m.group(3))))
@@ -122,7 +124,12 @@ def find_labeled_amount(text: str, label: str) -> int | None:
 # ============================================================
 
 def extract_bank_account(text: str) -> dict:
-    """Extract bank account info from text."""
+    """Extract bank account info from text.
+
+    Searches within the 'お振込先' / '振込先' section to avoid
+    picking up unrelated numbers (invoice line items, etc.).
+    Falls back to full text if no section marker is found.
+    """
     account = {
         "bankName": "",
         "branchName": "",
@@ -131,23 +138,32 @@ def extract_bank_account(text: str) -> dict:
         "accountHolder": "",
     }
 
-    m = BANK_NAMES_PATTERN.search(text)
+    # Narrow to bank section if possible
+    bank_section = text
+    section_match = re.search(
+        r"(?:お?振込先|振込口座|入金先|お支払い?先).*",
+        text, re.DOTALL
+    )
+    if section_match:
+        bank_section = section_match.group(0)[:500]  # limit scope
+
+    m = BANK_NAMES_PATTERN.search(bank_section)
     if m:
         account["bankName"] = m.group(1)
 
-    m = BRANCH_PATTERN.search(text)
+    m = BRANCH_PATTERN.search(bank_section)
     if m:
         account["branchName"] = m.group(1)
 
-    m = ACCOUNT_NUM_PATTERN.search(text)
+    m = ACCOUNT_NUM_PATTERN.search(bank_section)
     if m:
         account["accountNumber"] = m.group(1)
 
-    m = ACCOUNT_TYPE_PATTERN.search(text)
+    m = ACCOUNT_TYPE_PATTERN.search(bank_section)
     if m:
         account["accountType"] = m.group(1)
 
-    m = ACCOUNT_HOLDER_PATTERN.search(text)
+    m = ACCOUNT_HOLDER_PATTERN.search(bank_section)
     if m:
         account["accountHolder"] = m.group(1).strip()
 
@@ -248,7 +264,6 @@ def detect_vendor_name(text: str) -> str:
     1. Find the 御中 marker — text BEFORE it is the recipient, text AFTER is the sender/vendor
     2. If no 御中, look for company names in the top portion and pick the first non-header one
     """
-    import unicodedata
     text = unicodedata.normalize("NFKC", text)
     top_text = text[:800]
 
@@ -327,22 +342,20 @@ def extract_single_pdf(file_path: str, invoice_id: str) -> dict:
     try:
         # Note: each PDF is opened/closed individually. For typical invoice volumes
         # (10-30/month) this is fine. If processing 100+ files, consider batching.
-        pdf = pdfplumber.open(file_path)
+        # Using 'with' to ensure fd is closed even on exception.
+        full_text = ""
+        all_tables = []
+
+        with pdfplumber.open(file_path) as pdf:
+            for page in pdf.pages:
+                page_text = page.extract_text() or ""
+                full_text += page_text + "\n"
+                all_tables.extend(extract_tables_from_page(page))
     except Exception as e:
         result["extraction_method"] = "vision_required"
         result["confidence"] = "none"
-        result["warnings"].append(f"PDF open failed: {e}")
+        result["warnings"].append(f"PDF open/read failed: {e}")
         return result
-
-    full_text = ""
-    all_tables = []
-
-    for page in pdf.pages:
-        page_text = page.extract_text() or ""
-        full_text += page_text + "\n"
-        all_tables.extend(extract_tables_from_page(page))
-
-    pdf.close()
 
     # Check if we got meaningful text
     text_stripped = re.sub(r"\s+", "", full_text)
@@ -353,7 +366,6 @@ def extract_single_pdf(file_path: str, invoice_id: str) -> dict:
         return result
 
     # Normalize CJK compatibility ideographs (⾦→金, ⼝→口, etc.)
-    import unicodedata
     norm_text = unicodedata.normalize("NFKC", full_text)
 
     # --- Extract fields ---
@@ -507,7 +519,7 @@ def main():
         inv_id = f"inv-{i + 1:03d}"
         abs_file = os.path.abspath(file_path)
         # Path traversal guard: file must be under work_dir
-        if not abs_file.startswith(work_dir_abs):
+        if not abs_file.startswith(work_dir_abs + os.sep) and abs_file != work_dir_abs:
             print(f"\n  SKIP {file_path}: outside work directory", file=sys.stderr)
             continue
         rel_path = os.path.relpath(file_path, work_dir).replace("\\", "/")

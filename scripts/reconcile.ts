@@ -26,8 +26,12 @@ if (!/^https?:\/\//i.test(apiUrl)) {
 interface Transfer { id: string; recipientName: string; amount: number; status: string; createdAt: string; completedAt?: string; }
 
 async function main() {
-  const checkResult = JSON.parse(fs.readFileSync(path.join(workDir, '_check-result.json'), 'utf-8'));
-  const extracted = JSON.parse(fs.readFileSync(path.join(workDir, '_extracted.json'), 'utf-8'));
+  const checkPath = path.join(workDir, '_check-result.json');
+  const extractedPath = path.join(workDir, '_extracted.json');
+  if (!fs.existsSync(checkPath)) { console.error(`Not found: ${checkPath}`); process.exit(1); }
+  if (!fs.existsSync(extractedPath)) { console.error(`Not found: ${extractedPath}`); process.exit(1); }
+  const checkResult = JSON.parse(fs.readFileSync(checkPath, 'utf-8'));
+  const extracted = JSON.parse(fs.readFileSync(extractedPath, 'utf-8'));
 
   const okResults = checkResult.results.filter((r: any) => r.overallStatus !== 'NG');
   const okInvoices = okResults.map((r: any) => {
@@ -36,9 +40,15 @@ async function main() {
   });
 
   // API取得
-  const res = await fetch(`${apiUrl}/api/transfers`);
+  const res = await fetch(`${apiUrl}/api/transfers`, {
+    signal: AbortSignal.timeout(30_000),
+  });
   if (!res.ok) { console.error(`API error: ${res.status}`); process.exit(1); }
-  const { transfers }: { transfers: Transfer[] } = await res.json() as any;
+  const resBody = await res.json() as any;
+  const transfers: Transfer[] = Array.isArray(resBody?.transfers) ? resBody.transfers
+    : Array.isArray(resBody?.data) ? resBody.data
+    : Array.isArray(resBody) ? resBody
+    : (() => { console.error('API response has no transfers array'); process.exit(1); return []; })();
 
   console.log(`\n=== 消込確認 ===\n振込結果: ${transfers.length}件 | 照合対象: ${okInvoices.length}件 + ${(checkResult.autoAdditions || []).length}件自動追加\n`);
 

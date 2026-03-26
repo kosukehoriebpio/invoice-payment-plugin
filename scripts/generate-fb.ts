@@ -94,6 +94,20 @@ function parseSenderFromRef(refPath: string) {
 
 const sender = parseSenderFromRef(refFile);
 
+// Parse regular vendors from reference (for #24 new code determination)
+const regularVendors: Record<string, boolean> = {};
+if (refFile && fs.existsSync(refFile)) {
+  const refContent = fs.readFileSync(refFile, 'utf-8');
+  const vendorSection = refContent.match(/### 定期取引先[\s\S]*?(?=\n##|\n---)/m);
+  if (vendorSection) {
+    for (const line of vendorSection[0].split('\n')) {
+      if (!line.startsWith('|') || line.includes('---')) continue;
+      const cols = line.split('|').slice(1, -1).map(c => c.trim());
+      if (cols[0] && !cols[0].includes('取引先')) regularVendors[cols[0]] = true;
+    }
+  }
+}
+
 // NG除外
 const okResults = checkResult.results.filter((r: any) => r.overallStatus !== 'NG');
 const okInvoices = okResults.map((r: any) => extracted.invoices.find((i: any) => i.id === r.invoiceId)).filter(Boolean);
@@ -132,12 +146,34 @@ for (const auto of checkResult.autoAdditions || []) {
   });
 }
 
-const totalAmount = records.reduce((s, r) => s + r.amount, 0);
-console.log(`\n振込: ${records.length}件 合計¥${totalAmount.toLocaleString()}`);
+// #19: Skip records with incomplete bank info (empty bankCode or accountNumber)
+const validRecords = records.filter(r => {
+  if (r.bankCode === '0000' || !r.accountNumber) {
+    console.warn(`  [SKIP] ${r.vendorName}: 振込先口座情報が不完全（銀行コード不明・口座番号なし）`);
+    return false;
+  }
+  if (r.amount <= 0) {
+    console.warn(`  [SKIP] ${r.vendorName}: 金額が0以下（¥${r.amount}）`);
+    return false;
+  }
+  return true;
+});
+
+const totalAmount = validRecords.reduce((s, r) => s + r.amount, 0);
+
+// #22: Don't generate FB if no valid records
+if (validRecords.length === 0) {
+  console.error('\n[ERROR] 振込可能なレコードが0件です。FBファイルは生成しません。');
+  const summary = `# 振込サマリ\n\n生成: ${new Date().toISOString()}\n\n振込可能レコード: 0件\n全件が除外またはデータ不完全のためFB生成をスキップしました。\n`;
+  fs.writeFileSync(path.join(workDir, '_payment-summary.md'), summary);
+  process.exit(0);
+}
+
+console.log(`\n振込: ${validRecords.length}件 合計¥${totalAmount.toLocaleString()}`);
 
 // Warn about placeholder branch codes
 const branchWarnings: string[] = [];
-for (const r of records) {
+for (const r of validRecords) {
   console.log(`  ${r.vendorName}: ¥${r.amount.toLocaleString()}`);
   if (r.branchCode === '000') {
     branchWarnings.push(r.vendorName);
@@ -165,13 +201,17 @@ let h = '1' + '21' + padLeft(sender.code, 10) + padRight(sender.name, 40) + send
 const hB = iconv.encode(h, 'Shift_JIS');
 lines.push(iconv.decode(Buffer.concat([hB, Buffer.alloc(Math.max(0, 120 - hB.length), 0x20)]), 'Shift_JIS'));
 
-for (const r of records) {
-  let d = '2' + padLeft(r.bankCode, 4) + padRight(r.bankName, 15) + padLeft(r.branchCode, 3) + padRight(r.branchName, 15) + '    ' + r.accountType + padLeft(r.accountNumber, 7) + padRight(r.recipientName, 30) + padLeft(String(r.amount), 10) + '0' + ' '.repeat(40);
+for (const r of validRecords) {
+  // 新規コード: '0'=その他, '1'=第1回, '2'=変更(既存先)
+  // 初回振込か既存かの判定はリファレンスの定期取引先リストと突合して決定
+  const isKnownVendor = Object.keys(regularVendors || {}).includes(r.vendorName);
+  const newCode = isKnownVendor ? '2' : '0';
+  let d = '2' + padLeft(r.bankCode, 4) + padRight(r.bankName, 15) + padLeft(r.branchCode, 3) + padRight(r.branchName, 15) + '    ' + r.accountType + padLeft(r.accountNumber, 7) + padRight(r.recipientName, 30) + padLeft(String(r.amount), 10) + newCode + ' '.repeat(40);
   const dB = iconv.encode(d, 'Shift_JIS');
   lines.push(iconv.decode(Buffer.concat([dB, Buffer.alloc(Math.max(0, 120 - dB.length), 0x20)]), 'Shift_JIS'));
 }
 
-let t = '8' + padLeft(String(records.length), 6) + padLeft(String(totalAmount), 12);
+let t = '8' + padLeft(String(validRecords.length), 6) + padLeft(String(totalAmount), 12);
 const tB = iconv.encode(t, 'Shift_JIS');
 lines.push(iconv.decode(Buffer.concat([tB, Buffer.alloc(Math.max(0, 120 - tB.length), 0x20)]), 'Shift_JIS'));
 
@@ -184,5 +224,5 @@ console.log(`\nFB: ${fbPath}`);
 
 // Summary
 const excluded = checkResult.results.filter((r: any) => r.overallStatus === 'NG');
-const summary = `# 振込サマリ\n\n生成: ${new Date().toISOString()}\n\n| # | 取引先 | 金額 |\n|---|--------|------|\n${records.map((r, i) => `| ${i + 1} | ${r.vendorName} | ¥${r.amount.toLocaleString()} |`).join('\n')}\n\n合計: ${records.length}件 ¥${totalAmount.toLocaleString()}\n\n## 除外\n${excluded.map((r: any) => `- ${r.invoiceId} ${r.vendorName} ¥${r.totalAmount.toLocaleString()} — ${r.checks.find((c: any) => c.status === 'NG')?.message}`).join('\n') || 'なし'}\n`;
+const summary = `# 振込サマリ\n\n生成: ${new Date().toISOString()}\n\n| # | 取引先 | 金額 |\n|---|--------|------|\n${validRecords.map((r, i) => `| ${i + 1} | ${r.vendorName} | ¥${r.amount.toLocaleString()} |`).join('\n')}\n\n合計: ${validRecords.length}件 ¥${totalAmount.toLocaleString()}\n\n## 除外\n${excluded.map((r: any) => `- ${r.invoiceId} ${r.vendorName} ¥${r.totalAmount.toLocaleString()} — ${r.checks.find((c: any) => c.status === 'NG')?.message}`).join('\n') || 'なし'}\n`;
 fs.writeFileSync(path.join(workDir, '_payment-summary.md'), summary);

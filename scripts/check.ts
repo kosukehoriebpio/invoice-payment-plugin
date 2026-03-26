@@ -21,7 +21,7 @@ if (!workDir) {
 /** マークダウンテーブルの行をパースして列の配列にする */
 function parseTableRows(content: string, sectionHeader: string): string[][] {
   // セクションヘッダーからセクション末尾（次の##または---）まで抽出
-  const pattern = new RegExp(sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[\\s\\S]*?(?=\\n##|\\n---)', 'm');
+  const pattern = new RegExp(sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[\\s\\S]*?(?=\\n##|\\n---|$)', 'm');
   const match = content.match(pattern);
   if (!match) return [];
 
@@ -172,7 +172,7 @@ for (const inv of invoices) {
         checks.push({ checkType: 'amount_range', status: 'WARN', message: `固定額¥${reg.normalAmount.toLocaleString()}と不一致（¥${inv.totalAmount.toLocaleString()}）` });
         if (overallStatus === 'OK') overallStatus = 'WARN';
       }
-    } else {
+    } else if (reg.normalAmount > 0) {
       const diff = Math.abs(inv.totalAmount - reg.normalAmount) / reg.normalAmount;
       if (diff <= reg.tolerance) {
         checks.push({ checkType: 'amount_range', status: 'OK', message: `通常¥${reg.normalAmount.toLocaleString()}の±${reg.tolerance * 100}%内（${(diff * 100).toFixed(1)}%）` });
@@ -216,7 +216,7 @@ for (const inv of invoices) {
 
   // 6. 源泉徴収チェック
   if (withholdingVendors.includes(inv.vendorName)) {
-    if (inv.withholdingTax > 0) {
+    if (inv.withholdingTax != null && inv.withholdingTax > 0) {
       // 100万以下: 10.21%, 100万超: 超過分に20.42%
       const base = inv.subtotal;
       let expected: number;

@@ -102,7 +102,7 @@ function parseArgs(): CliArgs {
       case '--dry-run': result.dryRun = true; break;
       case '--company': result.company = args[++i]; break;
       case '--skip-content': result.skipContent = true; break;
-      case '--token': result.token = args[++i]; break;
+      // --token removed: use NOTION_TOKEN env var instead (security: CLI args visible via ps)
     }
   }
 

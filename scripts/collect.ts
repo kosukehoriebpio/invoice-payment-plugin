@@ -73,8 +73,8 @@ function parseArgs(): CollectArgs {
   };
 
   for (let i = 2; i < args.length; i++) {
-    if (args[i] === '--source') result.sourceOverride = args[++i];
-    if (args[i] === '--period') result.period = args[++i];
+    if (args[i] === '--source' && i + 1 < args.length) result.sourceOverride = args[++i];
+    if (args[i] === '--period' && i + 1 < args.length) result.period = args[++i];
     // --bakuraku-token removed: tokens must not appear in CLI args (visible via ps)
   }
 
@@ -190,7 +190,11 @@ async function collectFromDrive(folderId: string, invoicesDir: string, period: s
       // Filter by period if the file name or date matches
       // (relaxed: download all, let the user filter later)
       const safeName = file.name.replace(/[<>:"/\\|?*]/g, '_');
-      const destPath = path.join(invoicesDir, safeName);
+      // Avoid overwrite if same filename already exists
+      const destName = fs.existsSync(path.join(invoicesDir, safeName))
+        ? `${file.id!.slice(0, 8)}_${safeName}`
+        : safeName;
+      const destPath = path.join(invoicesDir, destName);
 
       // Download
       try {
@@ -201,7 +205,7 @@ async function collectFromDrive(folderId: string, invoicesDir: string, period: s
         fs.writeFileSync(destPath, Buffer.from(resp.data as ArrayBuffer));
 
         entries.push({
-          file: `invoices/${safeName}`,
+          file: `invoices/${destName}`,
           originalName: file.name,
           source: 'drive',
           downloadedAt: new Date().toISOString(),
