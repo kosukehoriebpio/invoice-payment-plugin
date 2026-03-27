@@ -475,18 +475,30 @@ function groupByCompany(pages: PageRecord[]): Map<string, CompanyGroup> {
 // ============================================================
 
 const TOOL_PATTERNS: Array<{ pattern: RegExp; tool: string }> = [
-  { pattern: /MF会計|マネーフォワード会計|MFクラウド会計/i, tool: 'moneyforward' },
-  { pattern: /freee/i, tool: 'freee' },
+  { pattern: /MF会計|マネーフォワード会計|MFクラウド会計|MF債務/i, tool: 'moneyforward' },
+  { pattern: /freee会計|freee人事/i, tool: 'freee' },
   { pattern: /弥生会計|弥生オンライン/i, tool: 'yayoi' },
-  { pattern: /勘定奉行|奉行クラウド/i, tool: 'bugyo' },
+  { pattern: /勘定奉行|奉行クラウド|人事奉行|給与奉行/i, tool: 'bugyo' },
   { pattern: /ICS/i, tool: 'ics' },
   { pattern: /PCA会計/i, tool: 'pca' },
-  { pattern: /TKC/i, tool: 'tkc' },
+  { pattern: /TKC.*FE|FE2クラウド/i, tool: 'tkc' },
 ];
 
 const BANK_PATTERN = /([\u4e00-\u9fa5A-Za-z]+銀行)/g;
-const BAKURAKU_PATTERN = /バクラク|bakuraku|layerx\.jp/i;
+const BAKURAKU_PATTERN = /バクラク.*(?:債[権務]|請求書|支払)|bakuraku|invoice\.layerx\.jp/i;
+const BAKURAKU_NEGATIVE = /バクラク.*(?:なし|未|不使用)/i;
 const FB_PATTERN = /FB[ファデ]|全銀|総合振込|FBデータ/i;
+
+// Collection source patterns
+const COLLECTION_PATTERNS: Array<{ pattern: RegExp; method: string }> = [
+  { pattern: /Teams.*(?:受領|共有|フォルダ)/i, method: 'teams' },
+  { pattern: /SharePoint|Share.*アクセス/i, method: 'sharepoint' },
+  { pattern: /Chatwork.*(?:請求書|振込|月末)/i, method: 'chatwork' },
+  { pattern: /Dropbox/i, method: 'dropbox' },
+  { pattern: /bpo\+\d+@sevenrich\.jp/i, method: 'gmail' },
+  { pattern: /drive\.google\.com\/drive\/.*folders/i, method: 'drive' },
+  { pattern: /Googleドライブ.*(?:請求書|格納|保存)/i, method: 'drive' },
+];
 
 const PAYMENT_CYCLE_PATTERNS: Array<{ pattern: RegExp; desc: string }> = [
   { pattern: /月末締め?翌月末払/i, desc: '月末締め翌月末払い' },
@@ -518,8 +530,10 @@ function extractInfo(group: CompanyGroup): ExtractedInfo {
     }
   }
 
-  // Bakuraku
-  const useBakuraku = BAKURAKU_PATTERN.test(allContent);
+  // Bakuraku — require actual usage context, not just mention
+  const bakurakuMentioned = BAKURAKU_PATTERN.test(allContent);
+  const bakurakuNegated = BAKURAKU_NEGATIVE.test(allContent);
+  const useBakuraku = bakurakuMentioned && !bakurakuNegated;
   let bakurakuDetails = '';
   if (useBakuraku) {
     const details: string[] = [];
@@ -609,10 +623,11 @@ function generateSlug(companyName: string): string {
 function generateReference(group: CompanyGroup, info: ExtractedInfo): string {
   const now = new Date().toISOString().replace(/\.\d+Z$/, '+09:00');
   const slug = generateSlug(group.clientName);
-  const tool = info.useBakuraku && info.accountingTool
-    ? `bakuraku + ${info.accountingTool}`
+  // メインの会計ソフトを優先。バクラクは補助ツールとして併記
+  const tool = info.accountingTool
+    ? (info.useBakuraku ? `bakuraku + ${info.accountingTool}` : info.accountingTool)
     : info.useBakuraku ? 'bakuraku'
-    : info.accountingTool || '未確認';
+    : '未確認';
 
   const pageList = group.pages
     .map(p => `  - ${p.category || '不明'}: ${p.title} (${p.lastEdited.slice(0, 10)})`)
