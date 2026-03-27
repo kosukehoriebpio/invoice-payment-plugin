@@ -2,15 +2,27 @@
 
 経理BPOの請求書振込業務をClaude Codeで標準化・自動化するプラグイン。
 
+## アクセス権限
+
+| リポジトリ | 公開設定 | 内容 |
+|-----------|---------|------|
+| [invoice-payment-plugin](https://github.com/kosukehoriebpio/invoice-payment-plugin) | **public** | プラグイン本体（スクリプト + SKILL.md） |
+| [claude-plugins](https://github.com/kosukehoriebpio/claude-plugins) | **public** | マーケットプレース manifest |
+| [invoice-payment-references](https://github.com/kosukehoriebpio/invoice-payment-references) | **private** | 129社クライアントリファレンス（招待制） |
+
+プラグイン本体は誰でも閲覧可能です。クライアントデータ（リファレンス）はprivateリポで管理されており、コラボレーターとして招待された社員のみアクセスできます。
+アクセス権が必要な場合は管理者に連絡してください。
+
 ## インストール
 
-```bash
-# マーケットプレース経由（社内配布後）
-/plugin marketplace add sevenrich/claude-plugins
-/plugin install invoice-payment@sevenrich-bpo-tools
+Claude Code 内で以下を実行:
 
-# または直接
-/plugin install github:sevenrich/invoice-payment-plugin
+```
+# Step 1: マーケットプレース追加（初回のみ）
+/plugin marketplace add kosukehoriebpio/claude-plugins
+
+# Step 2: プラグインインストール
+/plugin install invoice-payment@sevenrich-bpo-tools
 ```
 
 ## 使い方
@@ -80,6 +92,8 @@ test/
 
 ## 必要な環境
 
+- Claude Code
 - Node.js 20+
-- npm packages: `iconv-lite`, `multer`（モックAPI用）
+- Python 3.10+（`pip install pdfplumber`）
+- GitHub CLI（`gh auth login` 済み — referencesリポのクローンに必要）
 - MCP（オプション）: Gmail, Google Drive（Step 1の自動収集用）
