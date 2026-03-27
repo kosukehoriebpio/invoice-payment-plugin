@@ -41,12 +41,17 @@ WORK_DIR    = .tmp-invoice-payment/{client-slug}/{YYYY-MM}/
 SCRIPTS     = {PLUGIN_ROOT}/scripts/
 ```
 
-### 0-3. リファレンスの同期（自動pull）
+### 0-3. プラグイン本体とリファレンスの同期（自動pull）
 
-リファレンスはプラグインとは別のリポ（`kosukehoriebpio/invoice-payment-references`）で管理されている。
-プラグイン起動時に最新版を自動取得する:
+プラグイン本体（SKILL.md・スクリプト）とリファレンスは別リポで管理されている。
+起動時に両方の最新版を自動取得する:
 
 ```bash
+# --- プラグイン本体の更新 ---
+# PLUGIN_ROOT が git リポなら pull（SKILL.md・スクリプトの更新を反映）
+cd {PLUGIN_ROOT} && git pull --ff-only 2>/dev/null; cd -
+
+# --- リファレンスの同期 ---
 # 初回: クローン
 if [ ! -d ".invoice-payment-references" ]; then
   git clone https://github.com/kosukehoriebpio/invoice-payment-references.git .invoice-payment-references
@@ -56,14 +61,14 @@ fi
 cd .invoice-payment-references && git pull --ff-only && cd ..
 ```
 
-この処理は毎回Step 0で実行する。社員は初回実行時に自動クローンされ、以降は自動pullで常に最新のリファレンスが使える。
+この処理は毎回Step 0で実行する。プラグイン本体の更新（SKILL.mdの修正、スクリプトの改善等）も自動的に全ユーザーに反映される。
 
 **git clone/pull が認証エラーになった場合:**
-リポジトリはprivateのため、GitHub orgメンバーでなければアクセスできない。
+リファレンスリポはprivateのため、コラボレーターとして招待されていなければアクセスできない。
 以下をユーザーに案内して停止する:
 ```
-このプラグインは kosukehoriebpio GitHub Organization のメンバーのみ利用可能です。
-アクセス権がない場合は管理者に Organization への招待を依頼してください。
+リファレンスリポへのアクセス権がありません。
+管理者にGitHubコラボレーターとしての招待を依頼してください。
 
 GitHub CLI の認証が済んでいない場合は以下を実行してください:
   gh auth login
