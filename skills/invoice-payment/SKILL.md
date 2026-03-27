@@ -125,7 +125,51 @@ GitHub CLI の認証が済んでいない場合は以下を実行してくださ
    - **第2段**: リファレンスに記載なし → AskUserQuestion でユーザーに質問。回答があればリファレンスへの反映も提案
    - **第3段**: ユーザーも不明 → 該当処理をスキップし、手動操作の手順を案内。後続Stepは続行可能
 
-### 0-5. 作業ディレクトリ作成
+### 0-5. 前提ツール・認証のチェック（セットアップ案内）
+
+リファレンスの `source` と `tool` を読み、必要なツール・認証が揃っているか確認する。
+**不足がある場合は手動配置にフォールバックせず、セットアップを案内する。**
+
+```
+確認項目と対応:
+
+1. source に "drive:" を含む場合:
+   → Google Drive API が使えるか確認（gws MCP or googleapis認証）
+   → 使えない場合: 「Google Driveから自動収集するにはセットアップが必要です。
+     以下を実行してください: [gws のインストール・認証手順]
+     今回は手動配置で進めますか、それともセットアップしますか？」
+
+2. source に "gmail" を含む場合:
+   → Gmail API が使えるか確認
+   → 使えない場合: 同上
+
+3. source に "sharepoint" or "Teams" を含む場合:
+   → MSGRAPH_TOKEN 環境変数が設定されているか確認
+   → 未設定の場合: 「SharePointから自動収集するにはMicrosoft Graph APIの認証が必要です。
+     1. Azure CLI をインストール
+     2. az login で認証
+     3. export MSGRAPH_TOKEN=$(az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv)
+     今回は手動配置で進めますか、それともセットアップしますか？」
+
+4. source に "bakuraku" を含む場合:
+   → BAKURAKU_TOKEN 環境変数が設定されているか確認
+   → 未設定の場合: セットアップを案内
+
+5. Python 3 が必要（Step 2の extract.py）:
+   → `python --version` or `python3 --version` で確認
+   → 未インストールの場合: 「PDF読取にPython 3が必要です。インストールしてください。」
+```
+
+**ユーザーが「セットアップする」を選んだ場合**: 手順を案内し、完了を待ってから続行。
+**ユーザーが「手動で進める」を選んだ場合**: 該当Stepのみ手動モードで実行。
+
+collect.ts がセットアップ不足で終了コード 10-13 を返した場合も、同様にセットアップを案内する:
+- 10: SharePoint認証不足
+- 11: Google Drive認証不足
+- 12: Gmail認証不足
+- 13: バクラクトークン不足
+
+### 0-6. 作業ディレクトリ作成
 
 ```bash
 mkdir -p {WORK_DIR}/invoices

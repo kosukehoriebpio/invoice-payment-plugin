@@ -9,8 +9,10 @@
  *   --source drive:<folderId>   Google Drive フォルダから取得
  *   --source gmail:<query>      Gmail 添付PDF検索（例: gmail:"請求書 from:vendor@example.com"）
  *   --source bakuraku           バクラクAPIから処理中の請求書を取得
+ *   --source sharepoint:<siteUrl>/<folderPath>  SharePoint/Teamsフォルダから取得
  *   --source local              WORK_DIR/invoices/ を手動配置前提でスキャン
  *   --source auto               リファレンスの設定から自動判定（デフォルト）
+ *   (MSGRAPH_TOKEN env)          Microsoft Graph APIトークン（SharePoint収集用）
  *   --period <YYYY-MM>          対象年月（デフォルト: 当月）
  *   (BAKURAKU_TOKEN env)         バクラクAPIトークン（CLIオプションでの指定は不可 — セキュリティ上の理由）
  *
@@ -31,7 +33,7 @@ import path from 'path';
 interface ManifestEntry {
   file: string;
   originalName: string;
-  source: 'drive' | 'gmail' | 'bakuraku' | 'local';
+  source: 'drive' | 'gmail' | 'bakuraku' | 'sharepoint' | 'local';
   downloadedAt: string;
   status: 'pending';
 }
@@ -48,9 +50,10 @@ interface Manifest {
 interface CollectArgs {
   workDir: string;
   refFile: string;
-  sourceOverride: string | null; // "drive:<id>", "gmail:<query>", "bakuraku", "local", "auto"
+  sourceOverride: string | null; // "drive:<id>", "gmail:<query>", "bakuraku", "sharepoint:<url>", "local", "auto"
   period: string;                // YYYY-MM
   bakurakuToken: string;
+  msgraphToken: string;
 }
 
 // ============================================================
@@ -70,6 +73,7 @@ function parseArgs(): CollectArgs {
     sourceOverride: null,
     period: `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`,
     bakurakuToken: process.env.BAKURAKU_TOKEN || '',
+    msgraphToken: process.env.MSGRAPH_TOKEN || '',
   };
 
   for (let i = 2; i < args.length; i++) {
@@ -91,6 +95,7 @@ interface CollectionConfig {
   driveFolderId: string | null;
   gmailQuery: string | null;
   bakurakuUrl: string | null;
+  sharepointUrl: string | null;
 }
 
 function parseReference(refPath: string): CollectionConfig {
@@ -100,6 +105,7 @@ function parseReference(refPath: string): CollectionConfig {
     driveFolderId: null,
     gmailQuery: null,
     bakurakuUrl: null,
+    sharepointUrl: null,
   };
 
   if (!fs.existsSync(refPath)) return config;
@@ -129,6 +135,13 @@ function parseReference(refPath: string): CollectionConfig {
   // Detect Bakuraku
   if (/バクラク|bakuraku|layerx/i.test(config.source)) {
     config.bakurakuUrl = 'https://api.bakuraku.layerx.jp/rest/v1';
+  }
+
+  // Detect SharePoint/Teams
+  const spMatch = config.source.match(/sharepoint:(.+)/i) || config.source.match(/(https?:\/\/[^\/]*\.sharepoint\.com\S+)/i);
+  if (spMatch) config.sharepointUrl = spMatch[1];
+  if (/Teams|SharePoint|Share.*アクセス/i.test(config.source) && !config.sharepointUrl) {
+    config.sharepointUrl = config.source; // Store raw description for SKILL.md to handle
   }
 
   return config;
@@ -470,6 +483,115 @@ async function collectFromBakuraku(token: string, invoicesDir: string, period: s
 }
 
 // ============================================================
+// SharePoint Collection (Microsoft Graph API)
+// ============================================================
+
+const GRAPH_API_BASE = 'https://graph.microsoft.com/v1.0';
+
+async function collectFromSharepoint(spUrl: string, token: string, invoicesDir: string, period: string): Promise<ManifestEntry[]> {
+  console.error(`  SharePoint: ${spUrl}`);
+  const entries: ManifestEntry[] = [];
+
+  // Parse SharePoint URL to extract site and folder path
+  // Supported formats:
+  //   https://{tenant}.sharepoint.com/sites/{site}/Shared Documents/{folder}
+  //   sharepoint:{siteId}/{driveId}/{folderId}
+  //   sharepoint:{tenant}/{site}/{folderPath}
+
+  let apiUrl: string;
+
+  if (spUrl.includes('sharepoint.com')) {
+    // Full URL — use shares API to resolve
+    const encodedUrl = Buffer.from(spUrl).toString('base64url');
+    apiUrl = `${GRAPH_API_BASE}/shares/u!${encodedUrl}/driveItem/children`;
+  } else if (spUrl.includes('/')) {
+    // siteId/driveId/folderId or tenant/site/path format
+    const parts = spUrl.split('/');
+    if (parts.length >= 3) {
+      apiUrl = `${GRAPH_API_BASE}/sites/${parts[0]}/drives/${parts[1]}/items/${parts[2]}/children`;
+    } else {
+      console.error(`  ERROR: Invalid SharePoint source format: ${spUrl}`);
+      console.error(`  Expected: sharepoint:<tenant>.sharepoint.com/sites/<site>/path`);
+      console.error(`  Or: sharepoint:<siteId>/<driveId>/<folderId>`);
+      return entries;
+    }
+  } else {
+    console.error(`  ERROR: Cannot parse SharePoint URL: ${spUrl}`);
+    return entries;
+  }
+
+  try {
+    const res = await fetch(apiUrl, {
+      headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' },
+    });
+
+    if (res.status === 401 || res.status === 403) {
+      console.error(`  AUTH_REQUIRED: SharePoint authentication failed (${res.status}).`);
+      console.error(`  Set MSGRAPH_TOKEN env var with a valid Microsoft Graph API token.`);
+      console.error(`  To obtain: az login && az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv`);
+      process.exit(10); // Exit code 10 = auth required
+    }
+
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error(`  SharePoint API error: ${res.status} ${errText}`);
+      return entries;
+    }
+
+    const data = await res.json();
+    const items = data.value || [];
+    console.error(`  Found ${items.length} items in folder`);
+
+    const pdfExts = new Set(['.pdf', '.png', '.jpg', '.jpeg']);
+
+    for (const item of items) {
+      const name: string = item.name || '';
+      const ext = path.extname(name).toLowerCase();
+      if (!pdfExts.has(ext)) continue;
+      if (!item['@microsoft.graph.downloadUrl'] && !item.id) continue;
+
+      try {
+        const downloadUrl = item['@microsoft.graph.downloadUrl'];
+        if (!downloadUrl) {
+          console.error(`  ✗ ${name}: no download URL`);
+          continue;
+        }
+
+        const fileRes = await fetch(downloadUrl);
+        if (!fileRes.ok) continue;
+
+        const buffer = Buffer.from(await fileRes.arrayBuffer());
+        if (buffer.length > 20 * 1024 * 1024) {
+          console.error(`  ✗ ${name}: skipped (${(buffer.length / 1024 / 1024).toFixed(1)}MB exceeds 20MB limit)`);
+          continue;
+        }
+
+        const safeName = name.replace(/[<>:"/\\|?*]/g, '_');
+        const destName = fs.existsSync(path.join(invoicesDir, safeName))
+          ? `sp_${safeName}`
+          : safeName;
+        fs.writeFileSync(path.join(invoicesDir, destName), buffer);
+
+        entries.push({
+          file: `invoices/${destName}`,
+          originalName: name,
+          source: 'sharepoint',
+          downloadedAt: new Date().toISOString(),
+          status: 'pending',
+        });
+        console.error(`  ✓ ${safeName} (${(buffer.length / 1024).toFixed(0)}KB)`);
+      } catch (err: any) {
+        console.error(`  ✗ ${name}: ${err.message}`);
+      }
+    }
+  } catch (err: any) {
+    console.error(`  SharePoint collection failed: ${err.message}`);
+  }
+
+  return entries;
+}
+
+// ============================================================
 // Main
 // ============================================================
 
@@ -478,10 +600,11 @@ async function main() {
   const config = parseReference(args.refFile);
 
   // Determine source mode
-  type SourceMode = 'drive' | 'gmail' | 'bakuraku' | 'local';
+  type SourceMode = 'drive' | 'gmail' | 'bakuraku' | 'sharepoint' | 'local';
   let sourceMode: SourceMode = 'local';
   let driveFolderId: string | null = null;
   let gmailQuery: string | null = null;
+  let sharepointUrl: string | null = null;
 
   if (args.sourceOverride) {
     if (args.sourceOverride.startsWith('drive:')) {
@@ -492,11 +615,17 @@ async function main() {
       gmailQuery = args.sourceOverride.slice(6);
     } else if (args.sourceOverride === 'bakuraku') {
       sourceMode = 'bakuraku';
+    } else if (args.sourceOverride.startsWith('sharepoint:')) {
+      sourceMode = 'sharepoint';
+      sharepointUrl = args.sourceOverride.slice(11);
     } else if (args.sourceOverride === 'auto') {
-      // Priority: Drive > Bakuraku > Gmail > local
+      // Priority: Drive > SharePoint > Bakuraku > Gmail > local
       if (config.driveFolderId) {
         sourceMode = 'drive';
         driveFolderId = config.driveFolderId;
+      } else if (config.sharepointUrl) {
+        sourceMode = 'sharepoint';
+        sharepointUrl = config.sharepointUrl;
       } else if (config.bakurakuUrl) {
         sourceMode = 'bakuraku';
       } else if (config.gmailQuery) {
@@ -509,6 +638,9 @@ async function main() {
     if (config.driveFolderId) {
       sourceMode = 'drive';
       driveFolderId = config.driveFolderId;
+    } else if (config.sharepointUrl) {
+      sourceMode = 'sharepoint';
+      sharepointUrl = config.sharepointUrl;
     } else if (config.bakurakuUrl) {
       sourceMode = 'bakuraku';
     } else if (config.gmailQuery) {
@@ -541,8 +673,14 @@ async function main() {
       entries.push(...driveEntries);
       autoCollected = true;
     } catch (err: any) {
-      console.error(`  Drive collection failed: ${err.message}`);
-      console.error('  Falling back to local scan.');
+      console.error(`  SETUP_REQUIRED: Google Drive collection failed: ${err.message}`);
+      console.error('  ----------------------------------------');
+      console.error('  Google Drive へのアクセスにはセットアップが必要です:');
+      console.error('  1. Google Workspace CLI (gws) をインストール');
+      console.error('  2. gws auth login で認証');
+      console.error('  3. または googleapis + OAuth2 credentials を設定');
+      console.error('  ----------------------------------------');
+      process.exit(11); // Exit code 11 = Drive setup required
     }
   }
 
@@ -554,8 +692,14 @@ async function main() {
       entries.push(...gmailEntries);
       autoCollected = true;
     } catch (err: any) {
-      console.error(`  Gmail collection failed: ${err.message}`);
-      console.error('  Falling back to local scan.');
+      console.error(`  SETUP_REQUIRED: Gmail collection failed: ${err.message}`);
+      console.error('  ----------------------------------------');
+      console.error('  Gmail へのアクセスにはセットアップが必要です:');
+      console.error('  1. Google Workspace CLI (gws) をインストール');
+      console.error('  2. gws auth login で認証');
+      console.error('  3. または googleapis + OAuth2 credentials を設定');
+      console.error('  ----------------------------------------');
+      process.exit(12); // Exit code 12 = Gmail setup required
     }
   }
 
@@ -569,10 +713,32 @@ async function main() {
         autoCollected = true;
       } catch (err: any) {
         console.error(`  Bakuraku collection failed: ${err.message}`);
-        console.error('  Falling back to local scan.');
+        process.exit(13); // Exit code 13 = Bakuraku error
       }
     } else {
-      console.error('[Skip] Bakuraku: no token (set BAKURAKU_TOKEN env or --bakuraku-token)');
+      console.error('  SETUP_REQUIRED: バクラクAPIトークンが未設定です。');
+      console.error('  BAKURAKU_TOKEN 環境変数を設定してください。');
+      process.exit(13);
+    }
+  }
+
+  // === SharePoint Collection ===
+  if (sourceMode === 'sharepoint' && sharepointUrl) {
+    if (args.msgraphToken) {
+      console.error('[Auto] Collecting from SharePoint...');
+      const spEntries = await collectFromSharepoint(sharepointUrl, args.msgraphToken, invoicesDir, args.period);
+      entries.push(...spEntries);
+      autoCollected = true;
+    } else {
+      console.error('  SETUP_REQUIRED: Microsoft Graph APIトークンが未設定です。');
+      console.error('  ----------------------------------------');
+      console.error('  SharePoint へのアクセスにはセットアップが必要です:');
+      console.error('  1. Azure CLI をインストール: https://learn.microsoft.com/cli/azure/install-azure-cli');
+      console.error('  2. az login で認証');
+      console.error('  3. トークン取得: az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv');
+      console.error('  4. MSGRAPH_TOKEN 環境変数に設定');
+      console.error('  ----------------------------------------');
+      process.exit(10); // Exit code 10 = SharePoint auth required
     }
   }
 
