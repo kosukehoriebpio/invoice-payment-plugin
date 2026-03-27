@@ -1,7 +1,7 @@
 {
   "name": "invoice-payment",
   "description": "経理BPOの請求書振込業務を標準化・自動化する。クライアント別リファレンスに基づき、収集→読取→チェック→振込データ作成→実行→消込の6ステップを実行。129社対応。",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": {
     "name": "SevenRich BPO",
     "email": "kosuke.horie@sevenrich.jp"
