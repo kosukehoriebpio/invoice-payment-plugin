@@ -52,11 +52,12 @@ if [ ! -d ".invoice-payment-references" ]; then
   git clone https://github.com/kosukehoriebpio/invoice-payment-references.git .invoice-payment-references
 fi
 
-# 2回目以降: pull（最新版を取得）
-cd .invoice-payment-references && git pull --ff-only && cd ..
+# 2回目以降: ローカル変更を破棄してからpull（常にリモートの正規版を使う）
+cd .invoice-payment-references && git restore --staged . 2>/dev/null; git checkout -- . 2>/dev/null; git pull --ff-only && cd ..
 ```
 
-この処理は毎回Step 0で実行する。社員は初回実行時に自動クローンされ、以降は自動pullで常に最新のリファレンスが使える。
+**重要**: `git restore --staged` + `git checkout --` でローカルの変更（staged含む）を必ずリセットしてからpullする。
+前回セッションのClaude Codeがリファレンスをローカルで書き換えた場合でも、常にリモートの正規版が使われる。
 
 ### 0-4. リファレンス読込
 
