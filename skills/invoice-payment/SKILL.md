@@ -11,37 +11,6 @@ allowed-tools: Read, Bash, Glob, Grep, Write, Edit, AskUserQuestion
 
 ---
 
-## 全ステップ共通ルール: 不足情報の質問とリファレンス更新
-
-**このルールは全ステップに優先する。スクリプト実行やローカル配置案内よりも先に適用すること。**
-
-### 原則: 不足情報はユーザーに質問する
-
-各ステップでリファレンスの必須フィールドが空の場合、**黙ってフォールバックしてはならない**。
-必ず AskUserQuestion でユーザーに質問し、正しい情報を得てから処理を進める。
-
-```
-悪い例（禁止）:
-  source が空 → いきなり「ここにPDFを配置してください」
-
-良い例（必須）:
-  source が空 → 「{clientName} の請求書はどこから収集しますか？」と質問
-  → ユーザーの回答に基づいて処理を実行
-```
-
-### リファレンス更新フロー
-
-ユーザーから新しい情報を得たら、処理完了後に必ず以下を実行する:
-
-1. **提案**: 「この情報をリファレンスに保存しますか？次回から自動で使われます。」
-2. **承認されたら**: REF_FILE の該当フィールドを Edit で更新
-3. **コミット・プッシュ提案**: 「リファレンスリポに反映しますか？（他の社員にも共有されます）」
-4. **承認されたら**: `cd {REF_DIR} && git add . && git commit -m "update {client} reference" && git push`
-
-このフローにより、使えば使うほどリファレンスが充実していく。
-
----
-
 ## Step 0: 初期化（必ず最初に実行）
 
 ### 0-1. 引数パース
@@ -72,17 +41,12 @@ WORK_DIR    = .tmp-invoice-payment/{client-slug}/{YYYY-MM}/
 SCRIPTS     = {PLUGIN_ROOT}/scripts/
 ```
 
-### 0-3. プラグイン本体とリファレンスの同期（自動pull）
+### 0-3. リファレンスの同期（自動pull）
 
-プラグイン本体（SKILL.md・スクリプト）とリファレンスは別リポで管理されている。
-起動時に両方の最新版を自動取得する:
+リファレンスはプラグインとは別のリポ（`kosukehoriebpio/invoice-payment-references`）で管理されている。
+プラグイン起動時に最新版を自動取得する:
 
 ```bash
-# --- プラグイン本体の更新 ---
-# PLUGIN_ROOT が git リポなら pull（SKILL.md・スクリプトの更新を反映）
-cd {PLUGIN_ROOT} && git pull --ff-only 2>/dev/null; cd -
-
-# --- リファレンスの同期 ---
 # 初回: クローン
 if [ ! -d ".invoice-payment-references" ]; then
   git clone https://github.com/kosukehoriebpio/invoice-payment-references.git .invoice-payment-references
@@ -92,18 +56,7 @@ fi
 cd .invoice-payment-references && git pull --ff-only && cd ..
 ```
 
-この処理は毎回Step 0で実行する。プラグイン本体の更新（SKILL.mdの修正、スクリプトの改善等）も自動的に全ユーザーに反映される。
-
-**git clone/pull が認証エラーになった場合:**
-リファレンスリポはprivateのため、コラボレーターとして招待されていなければアクセスできない。
-以下をユーザーに案内して停止する:
-```
-リファレンスリポへのアクセス権がありません。
-管理者にGitHubコラボレーターとしての招待を依頼してください。
-
-GitHub CLI の認証が済んでいない場合は以下を実行してください:
-  gh auth login
-```
+この処理は毎回Step 0で実行する。社員は初回実行時に自動クローンされ、以降は自動pullで常に最新のリファレンスが使える。
 
 ### 0-4. リファレンス読込
 
@@ -120,130 +73,71 @@ GitHub CLI の認証が済んでいない場合は以下を実行してくださ
    - 定期取引先一覧
    - 振込元口座
    - 振込実行方法（method: manual/api）
-4. **不足フィールドを記録**する。各Stepで必要になった時点で以下の3段フォールバックを適用:
-   - **第1段**: リファレンスに記載あり → そのまま使用
-   - **第2段**: リファレンスに記載なし → AskUserQuestion でユーザーに質問。回答があればリファレンスへの反映も提案
-   - **第3段**: ユーザーも不明 → 該当処理をスキップし、手動操作の手順を案内。後続Stepは続行可能
 
-### 0-5. 前提ツール・認証のチェック（セットアップ案内）
-
-リファレンスの `source` と `tool` を読み、必要なツール・認証が揃っているか確認する。
-**不足がある場合は手動配置にフォールバックせず、セットアップを案内する。**
-
-```
-確認項目と対応:
-
-1. source に "drive:" を含む場合:
-   → Google Drive API が使えるか確認（gws MCP or googleapis認証）
-   → 使えない場合: 「Google Driveから自動収集するにはセットアップが必要です。
-     以下を実行してください: [gws のインストール・認証手順]
-     今回は手動配置で進めますか、それともセットアップしますか？」
-
-2. source に "gmail" を含む場合:
-   → Gmail API が使えるか確認
-   → 使えない場合: 同上
-
-3. source に "sharepoint" or "Teams" を含む場合:
-   → MSGRAPH_TOKEN 環境変数が設定されているか確認
-   → 未設定の場合: 「SharePointから自動収集するにはMicrosoft Graph APIの認証が必要です。
-     1. Azure CLI をインストール
-     2. az login で認証
-     3. export MSGRAPH_TOKEN=$(az account get-access-token --resource https://graph.microsoft.com --query accessToken -o tsv)
-     今回は手動配置で進めますか、それともセットアップしますか？」
-
-4. source に "bakuraku" を含む場合:
-   → BAKURAKU_TOKEN 環境変数が設定されているか確認
-   → 未設定の場合: セットアップを案内
-
-5. Python 3 が必要（Step 2の extract.py）:
-   → `python --version` or `python3 --version` で確認
-   → 未インストールの場合: 「PDF読取にPython 3が必要です。インストールしてください。」
-```
-
-**ユーザーが「セットアップする」を選んだ場合**: 手順を案内し、完了を待ってから続行。
-**ユーザーが「手動で進める」を選んだ場合**: 該当Stepのみ手動モードで実行。
-
-collect.ts がセットアップ不足で終了コード 10-13 を返した場合も、同様にセットアップを案内する:
-- 10: SharePoint認証不足
-- 11: Google Drive認証不足
-- 12: Gmail認証不足
-- 13: バクラクトークン不足
-
-### 0-6. 作業ディレクトリ作成
+### 0-5. 作業ディレクトリ作成
 
 ```bash
 mkdir -p {WORK_DIR}/invoices
 ```
 
-作成後、`{WORK_DIR}` の**絶対パス**を確定し、以降の全ステップでファイルパスをユーザーに伝える際は必ず絶対パスで表示すること。相対パスや変数名のままではユーザーがファイルを見つけられない。
+### 0-6. 初期化結果の報告と確認
+
+リファレンスから読み取った内容をユーザーに報告し、正しいか確認する:
+```
+=== Step 0 完了: 初期化 ===
+クライアント: {clientName}（{clientNo}）
+会計ツール: {tool}
+収集方法: {method} — {source}
+振込元口座: {銀行名}
+振込実行: {bankingSystem}（{method}）
+作業ディレクトリ: {WORK_DIR}
+
+→ この内容で Step 1（請求書収集）に進みますか？
+  リファレンスの情報に誤りがあれば教えてください。
+```
+→ AskUserQuestion で確認。ユーザーが誤りを指摘した場合はリファレンスを修正してから続行する。
 
 ---
 
 ## Step 1: 請求書収集（collect）
 
-### ★ まずリファレンスの source を確認する（スクリプト実行の前に必ず行う）
+リファレンスの「請求書収集」セクションの `method` を読んで分岐する。
 
-リファレンスの `source` フィールドを読み、以下の分岐に従う:
+### method: auto
+リファレンスの `source` に従って自動収集:
+- **Gmail**: Gmail MCPツール（gmail_search_messages / gmail_read_message）で検索→添付PDF保存
+- **Google Drive**: Drive MCPツール（drive_files_list / drive_files_download）でフォルダ内ファイル取得
+- MCPツールが使えない場合は manual にフォールバック
 
-#### A) source が記載されている場合 → スクリプトで自動収集
-
-```bash
-npx tsx {SCRIPTS}/collect.ts {WORK_DIR} {REF_FILE}
-```
-
-スクリプトがリファレンスの `source` を読み、自動で適切な収集モードを選択する:
-- **Google Drive**（sourceにフォルダIDがある場合）: Drive APIで自動ダウンロード
-- **Gmail**（sourceにメールアドレスや「Gmail」記載がある場合）: 対象期間の添付PDF付きメールを検索
-- **バクラク**（sourceにバクラクURL記載がある場合）: バクラクAPIで「処理中」の請求書を取得
-
-全モードで最後にローカルスキャンも実行し、手動追加されたファイルも拾う。
-
-#### B) source が空の場合 → ユーザーに質問する（スクリプトを実行してはいけない）
-
-**「配置してください」と案内してはいけない。まずユーザーに収集元を質問すること。**
-
-```
-「{clientName} の請求書はどこから収集しますか？
- 1. Google Drive（フォルダURLを教えてください）
- 2. Gmail（メールの添付ファイル）
- 3. バクラク（バクラクで請求書を管理している）
- 4. Teams / SharePoint
- 5. 手元にPDFファイルがある
- 6. その他（具体的に教えてください）」
-```
-→ AskUserQuestion で回答を待つ
-
-**回答に基づく処理:**
-- 1（Drive）→ フォルダURLまたはIDを聞き、`--source drive:{folderId}` で collect.ts を実行
-- 2（Gmail）→ 検索条件を聞き、`--source gmail:"..."` で collect.ts を実行
-- 3（バクラク）→ `--source bakuraku` で collect.ts を実行
-- 4（Teams/SharePoint）→ 「TeamsまたはSharePointから請求書をダウンロードし、以下に配置してください」と案内
-- 5（手元にPDF）→ 「以下のフォルダに配置してください」と案内
-- 6（その他）→ 回答内容をもとに最適な方法を判断
-
-**質問後、必ずリファレンス更新を提案する（共通ルール参照）。**
-
-### 手動配置の案内（ユーザーが 4 or 5 を選んだ場合のみ）
-
+### method: manual
+ユーザーに指示:
 ```
 「{clientName}の今月分の請求書PDFを以下に配置してください:
- {WORK_DIR の絶対パス}/invoices/
+ {WORK_DIR}/invoices/
  配置が完了したら教えてください。」
 ```
-→ AskUserQuestion で完了を待ち、その後スクリプトを実行
+→ AskUserQuestion で完了を待つ
 
-### hybrid モード
+### method: hybrid
+auto を実行した後、「他に手動で追加する請求書はありますか？」と確認
 
-Drive収集後に「他に手動で追加する請求書はありますか？」と確認。
-追加がある場合は `{WORK_DIR}/invoices/` に手動配置後、再度スクリプトを実行。
-
-### 収集完了後
-スクリプトが `_manifest.json` を `{WORK_DIR}/` に生成する。
-手動配置モードの場合、ユーザーに配置先のフルパスを明示すること:
+### 収集完了後の報告と確認
+`{WORK_DIR}/invoices/` 内のPDFファイル一覧を Glob で取得し、`_manifest.json` を生成。
+**ユーザーに収集結果を報告し、次のステップに進むか確認する:**
 ```
-請求書PDFを以下のフォルダに配置してください:
-  {WORK_DIR の絶対パス}/invoices/
+=== Step 1 完了: 請求書収集 ===
+収集方法: {method}
+収集元: {source}
+件数: {N}件
+ファイル一覧:
+- invoices/xxx.pdf
+- invoices/yyy.pdf
+
+→ Step 2（PDF読取・データ化）に進みますか？
 ```
+→ AskUserQuestion で確認。承認されなければ中断。
+
+`_manifest.json` を生成:
 
 ```json
 {
@@ -261,84 +155,58 @@ Write で `{WORK_DIR}/_manifest.json` に保存。
 
 ## Step 2: 請求書読取・データ化（extract）
 
-**2段構え**: Python構造パース（第1段）→ Claude Visionフォールバック（第2段）
+`_manifest.json` を Read で読み込み、各PDFを順に処理する。
 
-### Step 2-1: PDF構造パース（スクリプト）
+### 各PDFの処理手順
 
-```bash
-python {SCRIPTS}/extract.py {WORK_DIR}
+1. Read tool でPDFファイルを読み取る（Claude Visionが自動で画像として認識）
+2. リファレンスの「読取ヒント」セクションを参照し、既知取引先の場合はヒントを適用
+3. 以下のフィールドを抽出:
+
+```json
+{
+  "id": "inv-001",
+  "sourceFile": "invoices/xxx.pdf",
+  "vendorName": "取引先名",
+  "invoiceNumber": "請求書番号",
+  "invoiceDate": "YYYY-MM-DD",
+  "dueDate": "YYYY-MM-DD",
+  "subtotal": 0,
+  "taxAmount": 0,
+  "totalAmount": 0,
+  "taxBreakdown": [{ "rate": 0.10, "subtotal": 0, "tax": 0 }],
+  "withholdingTax": null,
+  "bankAccount": {
+    "bankName": "", "branchName": "", "accountType": "普通",
+    "accountNumber": "", "accountHolder": ""
+  },
+  "lineItems": [{ "item": "", "quantity": 0, "unit": "", "unitPrice": 0, "taxRate": 0.10, "amount": 0 }],
+  "registrationNumber": "Txxxxxxxxxx"
+}
 ```
 
-`_manifest.json` 内の全PDFに対し、pdfplumber でテキストレイヤーから構造化抽出を実行。
-以下を自動抽出する:
-- 取引先名、請求書番号、請求日、支払期日
-- 合計金額、小計、消費税額、税率別内訳
-- 源泉徴収税額
-- 振込先口座（銀行名、支店名、口座種別、番号、名義）
-- 明細行（テーブル構造から品名、数量、単価、金額）
-- 適格請求書登録番号（T + 13桁）
-
-各PDFの抽出結果に `confidence` フィールドが付く:
-- **high**: 取引先名・金額ともに構造パースで取得OK
-- **medium**: 金額は取れたが取引先名等が不完全
-- **low**: 金額が推定（文中最大値）
-- **none** (`extraction_method: "vision_required"`): テキストレイヤーなし → Step 2-2 へ
-
-### Step 2-2: Claude Visionフォールバック
-
-`_extracted.json` を Read で読み込み、`visionRequiredIds` に該当するPDFのみ Vision で処理する。
-
-1. 該当PDFを Read tool で読み取る（マルチモーダル自動認識）
-2. リファレンスの「読取ヒント」セクションを参照
-3. Step 2-1 と同じフィールドを抽出し、`_extracted.json` の該当エントリを上書き更新
-4. `extraction_method` を `"vision"` に変更
-
-**Vision不要（全件構造パース済み）の場合はこのステップをスキップ。**
-
-### 抽出結果のフォーマット
+4. 全件の抽出結果を統合して `_extracted.json` に Write で保存:
 
 ```json
 {
   "extractedAt": "ISO8601",
-  "method": "pdfplumber+vision_fallback",
-  "totalCount": 5,
-  "structureParsed": 4,
-  "visionRequired": 1,
-  "visionRequiredIds": ["inv-003"],
-  "invoices": [
-    {
-      "id": "inv-001",
-      "sourceFile": "invoices/xxx.pdf",
-      "extraction_method": "pdfplumber",
-      "vendorName": "取引先名",
-      "invoiceNumber": "請求書番号",
-      "invoiceDate": "YYYY-MM-DD",
-      "dueDate": "YYYY-MM-DD",
-      "subtotal": 0,
-      "taxAmount": 0,
-      "totalAmount": 0,
-      "taxBreakdown": [{ "rate": 0.10, "subtotal": 0, "tax": 0 }],
-      "withholdingTax": null,
-      "bankAccount": {
-        "bankName": "", "branchName": "", "accountType": "普通",
-        "accountNumber": "", "accountHolder": ""
-      },
-      "lineItems": [{ "item": "", "quantity": 0, "unit": "", "unitPrice": 0, "taxRate": 0.10, "amount": 0 }],
-      "registrationNumber": "Txxxxxxxxxx",
-      "confidence": "high",
-      "warnings": []
-    }
-  ]
+  "method": "claude-vision",
+  "totalCount": 0,
+  "invoices": [...]
 }
 ```
 
-### 抽出後のサマリ表示
+### 抽出後の報告と確認
 ```
-=== 抽出完了 ===
-構造パース: {N1}件 / Vision: {N2}件 / 合計¥{total}
-- inv-001: {vendorName} ¥{amount} [high]
-- inv-002: {vendorName} ¥{amount} [vision]
+=== Step 2 完了: 請求書読取・データ化 ===
+{N}件 / 合計¥{total}
+- inv-001: {vendorName} ¥{amount}
+- inv-002: {vendorName} ¥{amount}
+- ...
+
+→ Step 3（内容チェック）に進みますか？
 ```
+→ AskUserQuestion で確認。承認されなければ中断。
 
 ---
 
@@ -352,9 +220,15 @@ npx tsx {SCRIPTS}/check.ts {WORK_DIR} {REF_FILE}
 
 スクリプトが `_check-result.json` を `WORK_DIR` に出力する。
 
-### チェック後の判断
+### チェック後の報告と確認
 
-スクリプトの出力を確認し、ユーザーに報告する:
+スクリプトの出力を確認し、**必ず**ユーザーに報告する:
+
+```
+=== Step 3 完了: 内容チェック ===
+OK: {N}件 / WARN: {N}件 / NG: {N}件
+{チェック結果の詳細テーブル}
+```
 
 - **NGがある場合**: NG項目を報告し、続行するか確認する。
   ```
@@ -366,7 +240,8 @@ npx tsx {SCRIPTS}/check.ts {WORK_DIR} {REF_FILE}
 
 - **WARNのみの場合**: WARN内容を報告し、確認後に続行。
 
-- **全てOKの場合**: そのままStep 4に進む。
+- **全てOKの場合**: 結果を報告し、次のステップに進むか確認する。
+  → AskUserQuestion で確認。承認されなければ中断。
 
 ---
 
@@ -382,60 +257,22 @@ npx tsx {SCRIPTS}/generate-fb.ts {WORK_DIR} {REF_FILE}
 
 ### 振込サマリの確認
 
-`_payment-summary.md` を Read で読み込み、ユーザーに表示する。
-**生成されたファイルのフルパスを必ず明示すること**（ユーザーがファイルを見つけられるように）:
-
+`_payment-summary.md` を Read で読み込み、ユーザーに表示:
 ```
-以下の振込データを作成しました:
+「以下の振込データを作成しました:
+ {サマリの内容}
 
-{サマリの内容}
-
-📁 生成ファイル:
-  FBファイル: {WORK_DIR の絶対パス}/_payment.fb.txt
-  振込サマリ: {WORK_DIR の絶対パス}/_payment-summary.md
-
-振込実行に進みますか？
+ 振込実行に進みますか？」
 ```
 → AskUserQuestion で確認。承認されなければ中断。
 
-### 会計ツール連携
+### 会計ツール連携（リファレンスに apiAvailable: true の場合）
 
-`_tool-integration.json` と `_payment-summary.md` を Read で読み込み、ツール別に処理する。
-
-generate-fb.ts が自動判定した `primaryTool` に基づいて分岐:
-
-| primaryTool | ツール名 | API連携 | 処理 |
-|---|---|---|---|
-| `bakuraku` | バクラク債権・債務管理 | **可能** | `POST /workflow/requests` で支払申請作成 |
-| `mf-shiharai` | MF債務支払 | 未成熟 | 手動操作手順を案内 |
-| `freee` | freee会計 | **可能（未実装）** | 手動操作手順を案内（将来API化） |
-| `mf-kaikei` | MF会計 | CSV | CSVインポート手順を案内 |
-| `yayoi` | 弥生会計 | 手動 | 手動入力手順を案内 |
-| `bugyo` | 勘定奉行 | 手動 | 手動入力手順を案内 |
-| `ics` | ICS会計 | 手動 | 手動入力手順を案内 |
-| `tkc` | TKC会計 | 手動 | 手動入力手順を案内 |
-| `pca` | PCA会計 | 手動 | 手動入力手順を案内 |
-| `unknown` | 未特定 | — | ユーザーに質問（下記参照） |
-
-#### 会計ツールが未特定（unknown）の場合
-**黙ってスキップしてはいけない。** ユーザーに質問する:
-```
-「{clientName} で使用している会計ソフトを教えてください:
- 1. バクラク  2. MF債務支払  3. freee  4. MF会計
- 5. 弥生会計  6. 勘定奉行  7. ICS  8. TKC  9. PCA
- 10. その他（名前を教えてください）」
-```
-→ 回答に基づいて上記テーブルの該当処理を実行。**リファレンス更新を提案（共通ルール参照）。**
-
-#### バクラク（apiAvailable: true の場合）
-**注: この処理はスクリプトではなく、Claudeが直接API呼び出しを実行する。**
-ベースURL: `https://api.bakuraku.layerx.jp/rest/v1`（BAKURAKU_TOKEN env var 必須）
-1. 各請求書PDFを `POST /workflow/user_upload_files` でアップロード
-2. `POST /workflow/requests` で支払申請を作成（status: IN_PROGRESS）
-
-#### その他全ツール（apiAvailable: false の場合）
-`_payment-summary.md` の「会計ツール連携手順」セクションをそのままユーザーに表示。
-リファレンスに `manualInstructions` がカスタム記載されている場合はそちらを優先。
+リファレンスの `importMethod` に従ってAPI操作を実行:
+- バクラクの場合:
+  1. 各請求書PDFを `POST /workflow/user_upload_files` でアップロード
+  2. `POST /workflow/requests` で支払申請を作成（status: IN_PROGRESS）
+- apiAvailable: false の場合: `manualInstructions` の内容をユーザーに表示
 
 ---
 
@@ -445,20 +282,6 @@ generate-fb.ts が自動判定した `primaryTool` に基づいて分岐:
 APIやPlaywright等による銀行IBの自動操作は禁止。
 このステップでClaudeが行うのは「操作手順の提示」と「完了報告の受付」のみ。
 
-### ★ まずリファレンスの振込実行セクションを確認する
-
-#### bankingSystem が空の場合 → ユーザーに質問する
-```
-「{clientName} の振込に使うインターネットバンキングを教えてください:
- （例: 三菱UFJ BizSTATION、楽天銀行法人IB、PayPay銀行、りそなIB、GMOあおぞらネット銀行 等）」
-```
-→ 回答を得てから手順を提示。**リファレンス更新を提案（共通ルール参照）。**
-
-#### 振込元口座（銀行名）が空の場合 → ユーザーに質問する
-```
-「{clientName} の振込元口座（銀行名・支店名）を教えてください。」
-```
-
 ### 処理フロー
 
 リファレンスの「振込実行」セクションからIBの種類と操作手順を取得し、ユーザーに提示する:
@@ -467,9 +290,7 @@ APIやPlaywright等による銀行IBの自動操作は禁止。
 【振込実行手順】
 1. {bankingSystem} にログイン
 2. {リファレンスのinstructionsをそのまま表示}
-3. アップロードするファイル:
-   {WORK_DIR の絶対パス}/_payment.fb.txt
-   ※ エクスプローラーで上記パスを開いてファイルを取得してください
+3. アップロードするファイル: {WORK_DIR}/_payment.fb.txt
 4. 振込件数: {N}件 / 合計金額: ¥{total}
 
 完了したら教えてください。
@@ -503,10 +324,11 @@ npx tsx {SCRIPTS}/reconcile.ts {WORK_DIR} {APIのURL}
 ### 消込結果の報告
 `_reconcile-result.json` を Read で読み込み、最終レポートを表示:
 ```
-=== 消込結果 ===
+=== Step 6 完了: 消込確認 ===
 消込OK: {N}件 / 未消込: {N}件 / 不一致: {N}件
 {詳細テーブル}
 
+=== 全ステップ完了 ===
 請求書振込業務が完了しました。
 ```
 
@@ -514,18 +336,21 @@ npx tsx {SCRIPTS}/reconcile.ts {WORK_DIR} {APIのURL}
 
 ## 通し実行の制御
 
-全ステップ通し実行の場合、以下の順序で実行する。
-**各ステップの間でユーザー確認を挟む箇所に注意。**
+全ステップ通し実行の場合、**各ステップの完了後に必ず結果を報告し、ユーザーの承認を得てから次のステップに進む。**
+勝手に次のステップに進んではならない。
 
 ```
-Step 0 → パス解決・リファレンス読込
-Step 1 → 請求書収集
-Step 2 → PDF読取・データ化
-Step 3 → チェック（スクリプト） → 【ユーザー確認: NG/WARNがあれば】
-Step 4 → 振込データ作成（スクリプト） → 【ユーザー確認: 振込サマリ】
-Step 5 → 振込実行 → 【ユーザー確認: 手動の場合は完了報告を待つ】
-Step 6 → 消込確認（スクリプト）
+Step 0 → パス解決・リファレンス読込 → 【ユーザー報告: リファレンス内容のサマリ】
+Step 1 → 請求書収集              → 【ユーザー確認: 収集結果を報告し承認を得る】
+Step 2 → PDF読取・データ化        → 【ユーザー確認: 抽出結果を報告し承認を得る】
+Step 3 → チェック（スクリプト）    → 【ユーザー確認: チェック結果を報告し承認を得る】
+Step 4 → 振込データ作成           → 【ユーザー確認: 振込サマリを報告し承認を得る】
+Step 5 → 振込実行                → 【ユーザー確認: 手動操作の完了報告を待つ】
+Step 6 → 消込確認（スクリプト）    → 【ユーザー報告: 最終結果を表示】
 ```
+
+**原則**: 1ステップ完了 → 結果報告 → ユーザー「OK」「進めて」等の承認 → 次ステップ開始。
+承認なしに次のステップの処理を開始してはならない。
 
 ---
 
